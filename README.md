@@ -107,6 +107,8 @@ Para ligar o envio com o app fechado (uma vez só):
 
 - Tarefas são concluídas **por dia**, não por horário. O horário serve só para saber o que fazer naquele momento.
 - Se o horário passar, a tarefa continua pendente, marcada como **Atrasada**, até você concluir.
+- **Cronômetro (opcional)**: o botão ▶ em cada tarefa marca quanto tempo você leva nela. Pode pausar e continuar quantas vezes quiser. Iniciar outra tarefa pausa a anterior, e concluir a tarefa para o cronômetro. O total aparece em cada categoria/cliente e no Painel. Esqueceu de pausar? Edite a tarefa e corrija o "Tempo gasto".
+- No celular, toque no nome da tarefa para editar ou excluir.
 - Horário é **obrigatório na rotina semanal** e **opcional** nas tarefas avulsas do dia. Só tarefas com horário podem ter aviso.
 - Ao abrir um dia, o app gera as tarefas da rotina daquele dia da semana que ainda não existem.
 - Marcar como concluído altera só a tarefa daquele dia, nunca a rotina.
@@ -124,7 +126,7 @@ Os dados de cada pessoa ficam dentro de `users/{uid}`, e cada documento também 
 | `users/{uid}/categories/{id}` | nome, cor, ordem |
 | `users/{uid}/clients/{id}` | nome, categoriaId, observacoes |
 | `users/{uid}/recurringTasks/{id}` | titulo, categoriaId, clienteId?, diasDaSemana [0–6], horario, duracao?, aviso, avisoAntes, inicio |
-| `users/{uid}/dailyTasks/{id}` | titulo, categoriaId, clienteId?, data (AAAA-MM-DD), horario?, duracao?, aviso, avisoAntes, concluido, origem ('fixa' \| 'avulsa'), recurringTaskId?, removido |
+| `users/{uid}/dailyTasks/{id}` | titulo, categoriaId, clienteId?, data (AAAA-MM-DD), horario?, duracao?, aviso, avisoAntes, tempoGasto (segundos), cronometroInicio?, concluido, origem ('fixa' \| 'avulsa'), recurringTaskId?, removido |
 | `users/{uid}/devices/{id}` | token, nome (ex.: "Android · Chrome"), atualizadoEm: aparelhos que recebem avisos |
 | `users/{uid}/notifLog/{chave}` | data, tipo, origem: avisos já enviados (evita repetir; apagados após 2 dias) |
 
