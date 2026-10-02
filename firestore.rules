@@ -1,0 +1,41 @@
+rules_version = '2';
+
+// Cole este conteúdo em Firebase › Firestore Database › Regras e clique em Publicar.
+//
+// Quem pode usar o app: só os e-mails cadastrados na coleção "permitidos"
+// (o ID de cada documento é o e-mail, em letras minúsculas).
+// Quem tem o campo admin = true nesse documento pode liberar outros e-mails pela tela Acessos do app.
+// A lista fica só no Firebase: não aparece no GitHub.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function permitido() {
+      return logado() && exists(/databases/$(database)/documents/permitidos/$(request.auth.token.email));
+    }
+
+    function admin() {
+      return permitido()
+        && get(/databases/$(database)/documents/permitidos/$(request.auth.token.email)).data.get('admin', false) == true;
+    }
+
+    // Lista de e-mails liberados. Cada pessoa só consegue consultar o próprio e-mail;
+    // ver a lista inteira e alterar é só para administradores.
+    match /permitidos/{email} {
+      allow get: if logado() && (email == request.auth.token.email || admin());
+      allow list, create, update, delete: if admin();
+    }
+
+    // Dados de cada pessoa: só ela mesma, e só se o e-mail estiver liberado.
+    match /users/{uid} {
+      allow read, write: if permitido() && request.auth.uid == uid;
+
+      match /{document=**} {
+        allow read, write: if permitido() && request.auth.uid == uid;
+      }
+    }
+  }
+}

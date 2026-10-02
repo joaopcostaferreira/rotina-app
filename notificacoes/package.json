@@ -1,0 +1,9 @@
+{
+  "name": "rotina-notificacoes",
+  "private": true,
+  "type": "module",
+  "description": "Envia os avisos do app Rotina pelo Firebase Cloud Messaging (roda no GitHub Actions).",
+  "dependencies": {
+    "firebase-admin": "^14.5.0"
+  }
+}
