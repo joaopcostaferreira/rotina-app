@@ -802,9 +802,25 @@ code {
   flex: 1;
 }
 
+.task-main[data-action] {
+  cursor: pointer;
+}
+
 .task-title {
   overflow-wrap: anywhere;
   font-weight: 500;
+}
+
+/* No celular: tocar na tarefa abre a edição (com o botão Excluir); sobra espaço para o título. */
+@media (max-width: 600px) {
+  .task .task-actions {
+    display: none;
+  }
+
+  .task {
+    gap: 10px;
+    padding: 9px 6px;
+  }
 }
 
 .task.done .task-title {
@@ -852,6 +868,118 @@ code {
 
 .task.late .check {
   border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+}
+
+/* Cronômetro das tarefas */
+
+.timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  justify-content: center;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.timer .i {
+  width: 13px;
+  height: 13px;
+}
+
+.timer:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.timer.running {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.task.running {
+  background: var(--accent-soft);
+}
+
+.timer-chip,
+.time-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timer-chip .i,
+.time-total .i {
+  width: 13px;
+  height: 13px;
+}
+
+.time-total {
+  margin-left: auto;
+}
+
+.time-total + .count {
+  margin-left: 10px;
+}
+
+.hero-time {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.hero-time .i {
+  width: 14px;
+  height: 14px;
+}
+
+.running-now {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+
+.running-now > div {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.running-now strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.running-icon .i {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.field > span .i {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  margin-right: 4px;
 }
 
 /* Filtros da tela Hoje */
