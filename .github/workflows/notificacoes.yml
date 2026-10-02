@@ -1,0 +1,49 @@
+# Envia os avisos do app Rotina a cada ~5 minutos.
+# Precisa do secret FIREBASE_SERVICE_ACCOUNT (veja o README, seção "Notificações").
+
+name: Notificações
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # permite rodar na mão pela aba Actions
+
+concurrency:
+  group: notificacoes
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write # usado só para manter o agendamento ativo (ver último passo)
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependências
+        working-directory: notificacoes
+        run: npm install --no-audit --no-fund --loglevel=error
+
+      - name: Enviar avisos
+        working-directory: notificacoes
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node enviar.mjs
+
+      # O GitHub desliga agendamentos de repositórios sem atividade há 60 dias.
+      # Todo dia de madrugada (03h UTC), reativa este workflow para isso não acontecer.
+      - name: Manter agendamento ativo
+        if: github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%H)" = "03" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/notificacoes.yml/enable" || true
+          fi
