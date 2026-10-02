@@ -530,6 +530,35 @@ function isLate(t) {
 const avisoAtivo = (t) => !!t.horario && S.profile.notifTarefas && t.aviso !== false;
 const avisoMin = (t) => (Number.isFinite(t.avisoAntes) ? t.avisoAntes : S.profile.avisoAntes);
 
+// Cronômetro opcional: tempoGasto (segundos já acumulados) + cronometroInicio (momento do play, quando está rodando).
+const isRunning = (t) => !!t.cronometroInicio;
+const elapsed = (t) => (t.tempoGasto || 0) + (isRunning(t) ? Math.max(0, (Date.now() - t.cronometroInicio) / 1000) : 0);
+const sumTime = (list) => list.reduce((a, t) => a + elapsed(t), 0);
+
+// Pausa: soma o tempo corrido ao acumulado.
+function stopTimer(t, ops) {
+  t.tempoGasto = Math.round(elapsed(t));
+  t.cronometroInicio = null;
+  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { tempoGasto: t.tempoGasto, cronometroInicio: null } });
+}
+
+// Texto que se atualiza a cada segundo enquanto o cronômetro roda.
+const liveAttrs = (t) => `data-live data-base="${t.tempoGasto || 0}" data-start="${t.cronometroInicio}"`;
+
+function timerHTML(t) {
+  const run = isRunning(t);
+  const sec = elapsed(t);
+  if (t.concluido) return sec >= 60 ? `<span class="timer-chip" title="Tempo gasto">${icon('cronometro')}${U.fmtDur(sec)}</span>` : '';
+  const label = run ? `<span ${liveAttrs(t)}>${U.fmtRelogio(sec)}</span>` : sec ? `<span>${U.fmtDur(sec)}</span>` : '';
+  return `<button type="button" class="timer${run ? ' running' : ''}" data-action="timer" data-id="${t.id}" data-date="${t.data}"
+    aria-label="${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'} cronômetro" title="${run ? 'Pausar' : 'Iniciar'} cronômetro">${icon(run ? 'pause' : 'play')}${label}</button>`;
+}
+
+const timeTotal = (list) => {
+  const s = sumTime(list);
+  return s >= 60 ? `<span class="time-total" title="Tempo registrado">${icon('cronometro')}${U.fmtDur(s)}</span>` : '';
+};
+
 function taskRow(t, { showCat = false } = {}) {
   const cat = catById(t.categoriaId);
   const cli = cliById(t.clienteId);
@@ -544,13 +573,14 @@ function taskRow(t, { showCat = false } = {}) {
     showCat && cli ? `<span class="chip">${icon('clientes')}${esc(cli.nome)}</span>` : '',
     t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina semanal">${icon('rotina')}Rotina</span>` : '',
   ].join('');
-  return `<li class="task${t.concluido ? ' done' : ''}${late ? ' late' : ''}" style="--c:${colorOf(t)}">
+  return `<li class="task${t.concluido ? ' done' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}" style="--c:${colorOf(t)}">
     <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
       data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
-    <div class="task-main">
+    <div class="task-main" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}" title="Editar">
       <span class="task-title">${esc(t.titulo)}</span>
       ${meta ? `<span class="task-meta">${meta}</span>` : ''}
     </div>
+    ${timerHTML(t)}
     <div class="task-actions">
       <button type="button" class="icon-btn sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Editar">${icon('edit')}</button>
       <button type="button" class="icon-btn sm" data-action="remove-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Remover deste dia">${icon('trash')}</button>
@@ -573,14 +603,14 @@ function groupedList(tasks) {
         .map(cliById)
         .sort(U.byNome);
       return `<section class="group card" style="--c:${cat.cor}">
-        <header class="group-head"><i class="dot"></i><h2>${esc(cat.nome)}</h2><span class="count">${p.done}/${p.total}</span></header>
+        <header class="group-head"><i class="dot"></i><h2>${esc(cat.nome)}</h2>${timeTotal(list)}<span class="count">${p.done}/${p.total}</span></header>
         ${direct.length ? `<ul class="tasks">${direct.map((t) => taskRow(t)).join('')}</ul>` : ''}
         ${byClient
           .map((cli) => {
             const ct = list.filter((t) => t.clienteId === cli.id).sort(U.byHorarioTitulo);
             const cp = progress(ct);
             return `<div class="client-group">
-              <h3>${icon('clientes')}<span>${esc(cli.nome)}</span><span class="count">${cp.done}/${cp.total}</span></h3>
+              <h3>${icon('clientes')}<span>${esc(cli.nome)}</span>${timeTotal(ct)}<span class="count">${cp.done}/${cp.total}</span></h3>
               <ul class="tasks">${ct.map((t) => taskRow(t)).join('')}</ul>
             </div>`;
           })
@@ -673,11 +703,22 @@ function viewPainel() {
       <div>
         <h2>${p.done} de ${p.total} concluídas</h2>
         <p class="muted">${msg}</p>
+        ${sumTime(v) >= 60 ? `<p class="muted sm hero-time">${icon('cronometro')}Tempo registrado hoje: <strong>${U.fmtDur(sumTime(v))}</strong></p>` : ''}
         <a class="btn soft sm" href="#/hoje" data-action="go" data-route="hoje" data-date="${today}">Abrir lista de hoje</a>
       </div>
     </section>
     <section class="card now">
       <h2 class="card-title">${icon('horarios')}Agora</h2>
+      ${v
+        .filter(isRunning)
+        .map(
+          (t) => `<div class="running-now" style="--c:${colorOf(t)}">
+            <span class="running-icon">${icon('cronometro')}</span>
+            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">Cronômetro: <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
+            <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro">${icon('pause')}</button>
+          </div>`,
+        )
+        .join('')}
       ${agora.length ? agora.map(blockLine).join('') : '<p class="muted">Nada planejado para este horário.</p>'}
       <h2 class="card-title sub">Próximo</h2>
       ${prox ? blockLine(prox) : '<p class="muted">Nada mais com horário hoje.</p>'}
@@ -1432,6 +1473,12 @@ function openDailyForm(t) {
       <label class="field"><span>Duração no quadro de horários</span>${duracaoSelect(t.duracao)}</label>
       ${avisoFields(t)}
     </div>
+    ${
+      editing
+        ? `<label class="field"><span>${icon('cronometro')}Tempo gasto <em>(minutos, para corrigir o cronômetro)</em></span>
+      <input type="number" name="tempoMin" min="0" max="1440" step="1" inputmode="numeric" value="${Math.round(elapsed(t) / 60)}" data-orig="${Math.round(elapsed(t) / 60)}"></label>`
+        : ''
+    }
     ${modalFoot(editing ? 'remove-daily' : '', t.id)}
   </form>`);
   if (editing) modal.querySelector('[data-action="remove-daily"]').dataset.date = t.data;
@@ -1520,6 +1567,12 @@ const FORMS = {
       const newDate = f.data || oldDate;
       const t = findTask(id, oldDate);
       patch.data = newDate;
+      // Tempo corrigido à mão: substitui o acumulado (e reinicia a contagem se estiver rodando).
+      const tempo = form.elements.tempoMin;
+      if (tempo && tempo.value !== '' && tempo.value !== tempo.dataset.orig) {
+        patch.tempoGasto = Math.max(0, Math.round(Number(tempo.value) * 60));
+        if (t && isRunning(t)) patch.cronometroInicio = Date.now();
+      }
       if (t) {
         Object.assign(t, patch);
         if (newDate !== oldDate) {
@@ -1741,9 +1794,27 @@ const ACTIONS = {
   toggle: ({ id, date }) => {
     const t = findTask(id, date);
     if (!t) return;
+    const ops = [];
+    if (!t.concluido && isRunning(t)) stopTimer(t, ops); // concluiu: o cronômetro para
     t.concluido = !t.concluido;
+    ops.push({ type: 'update', col: 'dailyTasks', id, data: { concluido: t.concluido } });
     render();
-    persist(db.update('dailyTasks', id, { concluido: t.concluido }), () => (t.concluido = !t.concluido));
+    persist(db.batch(ops), () => (t.concluido = !t.concluido));
+  },
+  timer: ({ id, date }) => {
+    const t = findTask(id, date);
+    if (!t) return;
+    const ops = [];
+    if (isRunning(t)) {
+      stopTimer(t, ops);
+    } else {
+      // Uma coisa de cada vez: pausa o que estiver rodando.
+      for (const list of Object.values(S.days)) for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops);
+      t.cronometroInicio = Date.now();
+      ops.push({ type: 'update', col: 'dailyTasks', id, data: { cronometroInicio: t.cronometroInicio } });
+    }
+    render();
+    persist(db.batch(ops));
   },
   'new-daily': ({ date, cat, cli }) => openDailyForm({ data: date || S.date, categoriaId: cat, clienteId: cli }),
   'edit-daily': ({ id, date }) => {
@@ -1970,6 +2041,13 @@ setInterval(() => {
 }, 60_000);
 
 setInterval(notifTick, 30_000);
+
+// Cronômetros rodando: atualiza só o número na tela, a cada segundo.
+setInterval(() => {
+  document.querySelectorAll('[data-live]').forEach((el) => {
+    el.textContent = U.fmtRelogio(Number(el.dataset.base) + (Date.now() - Number(el.dataset.start)) / 1000);
+  });
+}, 1000);
 
 // Voltando ao app depois de um tempo: recarrega os dias (pode ter mudado em outro aparelho).
 let hiddenAt = 0;

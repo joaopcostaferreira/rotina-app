@@ -59,6 +59,22 @@ export const nowMin = () => {
   return d.getHours() * 60 + d.getMinutes();
 };
 
+// Tempo parado: "45 min", "1h 05min". Cronômetro rodando: "12:34" ou "1:02:03".
+export const fmtDur = (seg) => {
+  const m = Math.floor(seg / 60);
+  if (m < 1) return seg > 0 ? '< 1 min' : '0 min';
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)}h ${pad(m % 60)}min`;
+};
+
+export const fmtRelogio = (seg) => {
+  const s = Math.floor(seg);
+  const h = Math.floor(s / 3600);
+  const mm = pad(Math.floor((s % 3600) / 60));
+  const ss = pad(s % 60);
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+};
+
 export const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
