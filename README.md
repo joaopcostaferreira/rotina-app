@@ -97,6 +97,7 @@ Para ligar o envio com o app fechado (uma vez só):
 | **Hoje** | To-do list do dia agrupada por categoria e, dentro dela, por cliente. Filtros por status (pendentes, atrasadas, concluídas), categoria e cliente. Só aqui (e no Painel/Calendário) se marca como concluído. Navegue entre os dias com ‹ ›. |
 | **Horários** | Linha do tempo do dia, com os blocos de horário e uma linha vermelha no "agora". É só visual: concluir é na lista. |
 | **Calendário** | Mês inteiro com o progresso de cada dia. Abra um dia para adicionar tarefas avulsas ou remover tarefas da rotina **só daquele dia** (dá para restaurar). |
+| **Diário** | Uma folha por dia para ideias, brainstorming e anotações livres, com busca. |
 | **Rotina** | Tarefas fixas que se repetem por dia da semana (seg a dom), sempre com horário. Elas aparecem sozinhas na lista de cada dia. |
 | **Clientes** | Clientes ligados a uma categoria (normalmente Trabalho), cada um com as próprias tarefas fixas e avulsas. |
 | **Categorias** | Nome, cor e ordem das categorias. |
@@ -108,7 +109,9 @@ Para ligar o envio com o app fechado (uma vez só):
 - Tarefas são concluídas **por dia**, não por horário. O horário serve só para saber o que fazer naquele momento.
 - Se o horário passar, a tarefa continua pendente, marcada como **Atrasada**, até você concluir.
 - **Cronômetro (opcional)**: o botão ▶ em cada tarefa marca quanto tempo você leva nela. Pode pausar e continuar quantas vezes quiser. Iniciar outra tarefa pausa a anterior, e concluir a tarefa para o cronômetro. O total aparece em cada categoria/cliente e no Painel. Esqueceu de pausar? Edite a tarefa e corrija o "Tempo gasto".
-- No celular, toque no nome da tarefa para editar ou excluir.
+- **Notas da tarefa**: toque no nome de uma tarefa para abrir o painel dela, com o cronômetro, um bloco de notas que salva sozinho (o que foi feito, onde errou, o que melhorar; o botão "Usar modelo" preenche essas perguntas) e os botões Concluir e Editar.
+- **Histórico do cliente**: em Clientes, o botão "Histórico" mostra, dia por dia, as tarefas feitas, o tempo gasto e as notas daquele cliente.
+- **Diário**: uma folha por dia para ideias e brainstorming. Salva sozinho e tem busca.
 - Horário é **obrigatório na rotina semanal** e **opcional** nas tarefas avulsas do dia. Só tarefas com horário podem ter aviso.
 - Ao abrir um dia, o app gera as tarefas da rotina daquele dia da semana que ainda não existem.
 - Marcar como concluído altera só a tarefa daquele dia, nunca a rotina.
@@ -126,7 +129,8 @@ Os dados de cada pessoa ficam dentro de `users/{uid}`, e cada documento também 
 | `users/{uid}/categories/{id}` | nome, cor, ordem |
 | `users/{uid}/clients/{id}` | nome, categoriaId, observacoes |
 | `users/{uid}/recurringTasks/{id}` | titulo, categoriaId, clienteId?, diasDaSemana [0–6], horario, duracao?, aviso, avisoAntes, inicio |
-| `users/{uid}/dailyTasks/{id}` | titulo, categoriaId, clienteId?, data (AAAA-MM-DD), horario?, duracao?, aviso, avisoAntes, tempoGasto (segundos), cronometroInicio?, concluido, origem ('fixa' \| 'avulsa'), recurringTaskId?, removido |
+| `users/{uid}/dailyTasks/{id}` | titulo, categoriaId, clienteId?, data (AAAA-MM-DD), horario?, duracao?, aviso, avisoAntes, tempoGasto (segundos), cronometroInicio?, notas?, concluido, origem ('fixa' \| 'avulsa'), recurringTaskId?, removido |
+| `users/{uid}/journal/{AAAA-MM-DD}` | data, texto, atualizadoEm: o Diário (uma folha por dia) |
 | `users/{uid}/devices/{id}` | token, nome (ex.: "Android · Chrome"), atualizadoEm: aparelhos que recebem avisos |
 | `users/{uid}/notifLog/{chave}` | data, tipo, origem: avisos já enviados (evita repetir; apagados após 2 dias) |
 
