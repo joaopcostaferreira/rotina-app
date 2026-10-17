@@ -36,6 +36,8 @@ const fmtLongo = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numer
 const fmtMesAno = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' });
 
 export const fmtDiaLongo = (s) => cap(fmtLongo.format(parseYmd(s)));
+const fmtCurto = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+export const fmtDiaCurto = (s) => cap(fmtCurto.format(parseYmd(s)).replace(/\./g, ''));
 export const fmtMes = (yyyyMm) => cap(fmtMesAno.format(parseYmd(`${yyyyMm}-01`)));
 
 export const relativo = (s) => {

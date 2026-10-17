@@ -55,6 +55,9 @@ const S = {
   calSel: U.todayStr(),
   rotinaDia: 'all',
   filtro: { status: 'todas', cat: '', cli: '' }, // filtros da tela Hoje
+  diarioDate: U.todayStr(), // dia aberto no Diário
+  journal: null, // entradas do Diário (data -> { texto })
+  journalBusca: '',
   lastToday: U.todayStr(),
   installEvt: null,
   ready: false,
@@ -69,6 +72,7 @@ const NAV = [
   { id: 'hoje', label: 'Hoje' },
   { id: 'horarios', label: 'Horários' },
   { id: 'calendario', label: 'Calendário' },
+  { id: 'diario', label: 'Diário' },
   { id: 'rotina', label: 'Rotina' },
   { id: 'clientes', label: 'Clientes' },
   { id: 'categorias', label: 'Categorias' },
@@ -137,8 +141,32 @@ function persist(promise, onFail) {
   });
 }
 
+// Salvamento automático de textos (notas e diário): espera a pessoa parar de digitar.
+const pendingSaves = new Map();
+function debounceSave(key, fn, ms = 700) {
+  const p = pendingSaves.get(key);
+  if (p) clearTimeout(p.timer);
+  pendingSaves.set(key, {
+    fn,
+    timer: setTimeout(() => {
+      pendingSaves.delete(key);
+      fn();
+    }, ms),
+  });
+}
+function flushSaves() {
+  for (const p of pendingSaves.values()) {
+    clearTimeout(p.timer);
+    p.fn();
+  }
+  pendingSaves.clear();
+}
+const setStatus = (sel, text) => document.querySelectorAll(sel).forEach((el) => (el.textContent = text));
+
 let askResolver = null;
 function openModal(html) {
+  flushSaves();
+  delete modal.dataset.detail;
   modal.innerHTML = html;
   if (!modal.open) modal.showModal();
   const focus = modal.querySelector('[autofocus]');
@@ -148,6 +176,8 @@ function closeModal() {
   if (modal.open) modal.close();
 }
 modal.addEventListener('close', () => {
+  flushSaves();
+  delete modal.dataset.detail;
   if (askResolver) {
     const r = askResolver;
     askResolver = null;
@@ -288,6 +318,9 @@ function resetState() {
     blocked: false,
     isAdmin: false,
     acessos: null,
+    diarioDate: U.todayStr(),
+    journal: null,
+    journalBusca: '',
   });
 }
 
@@ -572,11 +605,12 @@ function taskRow(t, { showCat = false } = {}) {
     showCat && cat ? `<span class="chip cat"><i class="dot"></i>${esc(cat.nome)}</span>` : '',
     showCat && cli ? `<span class="chip">${icon('clientes')}${esc(cli.nome)}</span>` : '',
     t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina semanal">${icon('rotina')}Rotina</span>` : '',
+    t.notas?.trim() ? `<span class="chip muted" title="Tem notas">${icon('nota')}Notas</span>` : '',
   ].join('');
   return `<li class="task${t.concluido ? ' done' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}" style="--c:${colorOf(t)}">
     <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
       data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
-    <div class="task-main" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}" title="Editar">
+    <div class="task-main" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir notas e cronômetro">
       <span class="task-title">${esc(t.titulo)}</span>
       ${meta ? `<span class="task-meta">${meta}</span>` : ''}
     </div>
@@ -861,7 +895,7 @@ function viewHorarios() {
       const short = e - s < 40;
       return `<button type="button" class="block${t.concluido ? ' done' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}"
         style="--c:${colorOf(t)};top:calc(var(--h) * ${(s - start) / 60});height:calc(var(--h) * ${(e - s) / 60});left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})"
-        data-action="edit-daily" data-id="${t.id}" data-date="${t.data}">
+        data-action="open-task" data-id="${t.id}" data-date="${t.data}">
         <span class="block-time">${t.horario}–${U.fromMin(e)}</span>
         <span class="block-title">${esc(t.titulo)}</span>
         ${cli ? `<span class="block-sub">${esc(cli.nome)}</span>` : ''}
@@ -1056,6 +1090,7 @@ function viewClientes() {
       <footer>
         <button type="button" class="btn soft sm" data-action="new-rec" data-cat="${cli.categoriaId || ''}" data-cli="${cli.id}">${icon('rotina')}Tarefa fixa</button>
         <button type="button" class="btn ghost sm" data-action="new-daily" data-date="${U.todayStr()}" data-cat="${cli.categoriaId || ''}" data-cli="${cli.id}">${icon('plus')}Tarefa avulsa</button>
+        <button type="button" class="btn ghost sm" data-action="client-history" data-id="${cli.id}">${icon('nota')}Histórico</button>
       </footer>
     </article>`;
   };
@@ -1165,6 +1200,185 @@ function viewAjustes() {
       <button type="button" class="btn ghost danger-text" data-action="logout">${icon('logout')}Sair da conta</button>
     </section>
   </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Bloco de notas de cada tarefa (com o cronômetro)
+// ---------------------------------------------------------------------------
+
+const NOTAS_MODELO = '✅ O que foi feito:\n\n\n⚠️ Onde errei / o que travou:\n\n\n💡 O que melhorar na próxima vez:\n';
+
+function openTaskDetail(t) {
+  const cat = catById(t.categoriaId);
+  const cli = cliById(t.clienteId);
+  const run = isRunning(t);
+  const sec = elapsed(t);
+  const sub = [cat?.nome, cli?.nome].filter(Boolean).map(esc).join(' · ');
+  openModal(`<div class="modal-body detail" style="--c:${colorOf(t)}">
+    <header class="modal-head">
+      <div class="detail-title">
+        <p class="eyebrow">${esc([U.fmtDiaLongo(t.data), t.horario].filter(Boolean).join(' · '))}</p>
+        <h2>${esc(t.titulo)}</h2>
+        ${sub ? `<p class="muted sm"><i class="dot"></i>${sub}</p>` : ''}
+      </div>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button>
+    </header>
+    <section class="detail-timer${run ? ' running' : ''}">
+      <div>
+        <span class="eyebrow">${icon('cronometro')}Tempo gasto</span>
+        <strong class="detail-clock" ${run ? liveAttrs(t) : ''}>${U.fmtRelogio(sec)}</strong>
+      </div>
+      ${
+        t.concluido
+          ? '<span class="muted sm">Tarefa concluída</span>'
+          : `<button type="button" class="btn ${run ? 'primary' : 'soft'}" data-action="timer" data-id="${t.id}" data-date="${t.data}">
+              ${icon(run ? 'pause' : 'play')}${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'}</button>`
+      }
+    </section>
+    <label class="field notes-field"><span>${icon('nota')}Notas <em>só você vê</em></span>
+      <textarea rows="9" data-notes data-id="${t.id}" data-date="${t.data}"
+        placeholder="O que foi feito, onde errei, o que funcionou, próximos passos…">${esc(t.notas || '')}</textarea></label>
+    <div class="notes-bar">
+      ${t.notas?.trim() ? '' : `<button type="button" class="link" data-action="notes-template">Usar modelo</button>`}
+      <span class="muted sm" data-notes-status></span>
+    </div>
+    <footer class="modal-actions">
+      <button type="button" class="btn ghost sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}">${icon('edit')}Editar</button>
+      <span class="grow"></span>
+      <button type="button" class="btn ${t.concluido ? 'ghost' : 'primary'}" data-action="toggle" data-id="${t.id}" data-date="${t.data}">
+        ${icon(t.concluido ? 'undo' : 'check')}${t.concluido ? 'Reabrir' : 'Concluir'}</button>
+    </footer>
+  </div>`);
+  modal.dataset.detail = t.id;
+}
+
+// Depois de play/pausa/concluir, atualiza o painel da tarefa se ele estiver aberto.
+function refreshDetail(id, date) {
+  if (modal.open && modal.dataset.detail === id) {
+    const t = findTask(id, date);
+    if (t) openTaskDetail(t);
+  }
+}
+
+function saveNotes(t) {
+  persist(db.update('dailyTasks', t.id, { notas: t.notas || '' }));
+  setStatus('[data-notes-status]', 'Salvo ✓');
+}
+
+// Histórico de um cliente: tudo que foi feito, quanto tempo levou e as notas.
+async function openClientHistory(cli) {
+  openModal(`<div class="modal-body">${modalHead(`Histórico · ${esc(cli.nome)}`)}${loading()}</div>`);
+  let rows;
+  try {
+    rows = await db.where('dailyTasks', 'clienteId', '==', cli.id);
+  } catch (err) {
+    closeModal();
+    return toast(errMsg(err));
+  }
+  // Usa a versão em memória quando o dia já está aberto (pode ter mudanças ainda sendo salvas).
+  rows = rows.map((r) => findTask(r.id, r.data) || r);
+  const items = rows
+    .filter((t) => !t.removido && (t.notas?.trim() || elapsed(t) >= 60 || t.concluido))
+    .sort((a, b) => b.data.localeCompare(a.data) || U.byHorarioTitulo(a, b))
+    .slice(0, 150);
+  const total = sumTime(items);
+  const feitas = items.filter((t) => t.concluido).length;
+  const list = items
+    .map(
+      (t) => `<li class="hist-item">
+        <div class="hist-head">
+          <span class="hist-date">${esc(U.fmtDiaCurto(t.data))}</span>
+          <strong>${t.concluido ? `<span class="hist-ok">${icon('check')}</span>` : ''}${esc(t.titulo)}</strong>
+          ${elapsed(t) >= 60 ? `<span class="timer-chip">${icon('cronometro')}${U.fmtDur(elapsed(t))}</span>` : ''}
+        </div>
+        ${t.notas?.trim() ? `<p class="hist-notes">${esc(t.notas.trim())}</p>` : ''}
+      </li>`,
+    )
+    .join('');
+  if (!modal.open) return;
+  openModal(`<div class="modal-body history">
+    ${modalHead(`Histórico · ${esc(cli.nome)}`)}
+    <div class="hist-summary">
+      <div><strong>${feitas}</strong><span>${feitas === 1 ? 'tarefa concluída' : 'tarefas concluídas'}</span></div>
+      <div><strong>${U.fmtDur(total)}</strong><span>tempo registrado</span></div>
+      <div><strong>${items.filter((t) => t.notas?.trim()).length}</strong><span>com notas</span></div>
+    </div>
+    ${list ? `<ul class="hist-list">${list}</ul>` : '<p class="muted">Ainda não há tarefas concluídas, tempo ou notas para este cliente.</p>'}
+  </div>`);
+}
+
+// ---------------------------------------------------------------------------
+// Diário: uma folha por dia para ideias, brainstorming, o que quiser
+// ---------------------------------------------------------------------------
+
+const palavras = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+
+function journalListHTML() {
+  const q = (S.journalBusca || '').trim().toLowerCase();
+  const entries = Object.values(S.journal || {})
+    .filter((e) => e.texto?.trim() && (!q || e.texto.toLowerCase().includes(q)))
+    .sort((a, b) => b.id.localeCompare(a.id));
+  if (!entries.length) return `<p class="muted sm">${q ? 'Nada encontrado.' : 'Suas anotações aparecem aqui.'}</p>`;
+  return entries
+    .map((e) => {
+      const txt = e.texto.trim();
+      // Trecho do texto: o começo, ou em volta da palavra buscada.
+      const i = q ? txt.toLowerCase().indexOf(q) : 0;
+      const from = Math.max(0, i - 40);
+      const to = from + 110;
+      const snippet = (from > 0 ? '…' : '') + txt.slice(from, to) + (to < txt.length ? '…' : '');
+      return `<li><button type="button" class="journal-item${e.id === S.diarioDate ? ' on' : ''}" data-action="diario-open" data-date="${e.id}">
+        <span class="journal-date">${esc(U.fmtDiaCurto(e.id))}</span>
+        <span class="journal-snippet">${esc(snippet)}</span></button></li>`;
+    })
+    .join('');
+}
+
+function viewDiario() {
+  if (!S.journal) {
+    db.list('journal')
+      .then((rows) => {
+        S.journal = Object.fromEntries(rows.map((r) => [r.id, r]));
+        render();
+      })
+      .catch((err) => toast(errMsg(err)));
+    return loading();
+  }
+  const d = S.diarioDate;
+  const texto = S.journal[d]?.texto || '';
+  const isToday = d === U.todayStr();
+  return `
+  <header class="page-head">
+    <div class="daynav">
+      <button type="button" class="icon-btn" data-action="diario-shift" data-n="-1" aria-label="Dia anterior">${icon('left')}</button>
+      <div class="daynav-title"><span class="eyebrow">Diário · ${esc(U.relativo(d))}</span><h1>${esc(U.fmtDiaLongo(d))}</h1></div>
+      <button type="button" class="icon-btn" data-action="diario-shift" data-n="1" aria-label="Próximo dia">${icon('right')}</button>
+      ${isToday ? '' : '<button type="button" class="btn ghost sm" data-action="diario-today">Ir para hoje</button>'}
+    </div>
+  </header>
+  <div class="journal-layout">
+    <section class="card journal-page">
+      <textarea data-journal data-date="${d}" aria-label="Diário de ${esc(U.fmtDiaLongo(d))}"
+        placeholder="Escreva livremente: ideias, brainstorming, aprendizados, como foi o dia…">${esc(texto)}</textarea>
+      <footer class="journal-foot"><span data-journal-count>${palavras(texto)} palavra${palavras(texto) === 1 ? '' : 's'}</span><span data-journal-status></span></footer>
+    </section>
+    <aside class="card journal-side">
+      <label class="journal-search">${icon('busca')}<input type="search" data-journal-search placeholder="Buscar no diário" value="${esc(S.journalBusca || '')}" aria-label="Buscar no diário"></label>
+      <ul class="journal-list" id="journal-list">${journalListHTML()}</ul>
+    </aside>
+  </div>`;
+}
+
+function saveJournal(d) {
+  const texto = S.journal?.[d]?.texto || '';
+  if (texto.trim()) persist(db.set('journal', d, { data: d, texto, atualizadoEm: Date.now() }));
+  else {
+    delete S.journal[d];
+    persist(db.remove('journal', d));
+  }
+  setStatus('[data-journal-status]', 'Salvo ✓');
+  const list = $('#journal-list');
+  if (list) list.innerHTML = journalListHTML();
 }
 
 // Tela Acessos (só administradores): quais e-mails podem entrar no app.
@@ -1404,6 +1618,7 @@ const VIEWS = {
   categorias: viewCategorias,
   ajustes: viewAjustes,
   acessos: viewAcessos,
+  diario: viewDiario,
 };
 
 // ---------------------------------------------------------------------------
@@ -1799,7 +2014,41 @@ const ACTIONS = {
     t.concluido = !t.concluido;
     ops.push({ type: 'update', col: 'dailyTasks', id, data: { concluido: t.concluido } });
     render();
+    refreshDetail(id, date);
     persist(db.batch(ops), () => (t.concluido = !t.concluido));
+  },
+  'open-task': ({ id, date }) => {
+    const t = findTask(id, date);
+    if (t) openTaskDetail(t);
+  },
+  'notes-template': (_, el) => {
+    const ta = modal.querySelector('[data-notes]');
+    if (!ta) return;
+    ta.value = ta.value.trim() ? `${ta.value.trimEnd()}\n\n${NOTAS_MODELO}` : NOTAS_MODELO;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    el.remove();
+    ta.focus();
+    ta.setSelectionRange(NOTAS_MODELO.indexOf('\n') + 1, NOTAS_MODELO.indexOf('\n') + 1);
+  },
+  'client-history': ({ id }) => {
+    const cli = cliById(id);
+    if (cli) openClientHistory(cli);
+  },
+  'diario-shift': ({ n }) => {
+    flushSaves();
+    S.diarioDate = U.addDays(S.diarioDate, Number(n));
+    render();
+  },
+  'diario-today': () => {
+    flushSaves();
+    S.diarioDate = U.todayStr();
+    render();
+  },
+  'diario-open': ({ date }) => {
+    flushSaves();
+    S.diarioDate = date;
+    render();
+    if (!isWide()) window.scrollTo({ top: 0, behavior: 'smooth' });
   },
   timer: ({ id, date }) => {
     const t = findTask(id, date);
@@ -1814,6 +2063,7 @@ const ACTIONS = {
       ops.push({ type: 'update', col: 'dailyTasks', id, data: { cronometroInicio: t.cronometroInicio } });
     }
     render();
+    refreshDetail(id, date);
     persist(db.batch(ops));
   },
   'new-daily': ({ date, cat, cli }) => openDailyForm({ data: date || S.date, categoriaId: cat, clienteId: cli }),
@@ -2010,13 +2260,38 @@ document.addEventListener('change', (e) => {
 
 // Na lista do dia, duração e aviso só aparecem quando a tarefa tem horário.
 document.addEventListener('input', (e) => {
-  if (e.target.matches('[data-horario]')) {
-    const group = e.target.form.querySelector('[data-aviso-group]');
-    if (group) group.hidden = !e.target.value;
+  const el = e.target;
+  if (el.matches('[data-horario]')) {
+    const group = el.form.querySelector('[data-aviso-group]');
+    if (group) group.hidden = !el.value;
+  } else if (el.matches('[data-notes]')) {
+    // Notas da tarefa: guarda na memória na hora e salva quando a pessoa para de digitar.
+    const t = findTask(el.dataset.id, el.dataset.date);
+    if (!t) return;
+    t.notas = el.value;
+    setStatus('[data-notes-status]', 'Salvando…');
+    debounceSave(`notas:${t.id}`, () => saveNotes(t));
+  } else if (el.matches('[data-journal]')) {
+    const d = el.dataset.date;
+    S.journal[d] = { ...S.journal[d], id: d, texto: el.value };
+    const n = palavras(el.value);
+    setStatus('[data-journal-count]', `${n} palavra${n === 1 ? '' : 's'}`);
+    setStatus('[data-journal-status]', 'Salvando…');
+    debounceSave(`diario:${d}`, () => saveJournal(d), 900);
+  } else if (el.matches('[data-journal-search]')) {
+    S.journalBusca = el.value;
+    $('#journal-list').innerHTML = journalListHTML();
   }
 });
 
+// Ao sair da página ou do app, salva o que ainda estiver sendo digitado.
+window.addEventListener('pagehide', flushSaves);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushSaves();
+});
+
 window.addEventListener('hashchange', () => {
+  flushSaves();
   $('#more')?.classList.remove('open');
   closeModal();
   render();
