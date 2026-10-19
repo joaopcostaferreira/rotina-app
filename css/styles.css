@@ -1310,6 +1310,103 @@ dialog:has(.history) {
   }
 }
 
+/* Importar e exportar */
+
+dialog:has(.import-preview) {
+  width: min(640px, calc(100% - 32px));
+}
+
+.import-preview section {
+  margin-bottom: 16px;
+}
+
+.import-preview h3 {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+
+.imp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.imp-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 14px;
+}
+
+.imp-list .day-dots {
+  margin-left: auto;
+}
+
+.imp-time {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+}
+
+.imp-warn li {
+  background: color-mix(in srgb, #eab308 14%, var(--surface));
+}
+
+.imp-err li {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+.imp-replace {
+  margin-top: 4px;
+  align-items: flex-start;
+}
+
+.switch-row.imp-replace > span:last-child {
+  display: block;
+}
+
+.imp-replace small {
+  display: block;
+  font-weight: 400;
+}
+
+.imp-paste {
+  margin-top: 14px;
+}
+
+.imp-paste summary {
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.imp-paste textarea {
+  width: 100%;
+  margin: 10px 0 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font: 13px/1.5 ui-monospace, 'Cascadia Code', Consolas, monospace;
+  color: var(--text);
+}
+
+label.btn {
+  cursor: pointer;
+}
+
 /* Filtros da tela Hoje */
 
 .filters {
