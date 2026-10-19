@@ -118,6 +118,46 @@ Para ligar o envio com o app fechado (uma vez só):
 - Editar uma tarefa fixa atualiza as próximas ocorrências ainda não concluídas. Dias passados ficam como histórico.
 - Uma tarefa fixa nova só começa a aparecer a partir do dia em que foi criada.
 
+## Importar e exportar
+
+Em **Ajustes › Importar e exportar**:
+
+- **Importar arquivo** (ou colar o conteúdo): mostra um resumo do que vai entrar e só grava depois que você confirma.
+  - Categorias e clientes que já existem são reaproveitados pelo nome, sem diferença de maiúsculas ou acentos.
+  - Tarefas fixas iguais às que você já tem são puladas.
+  - Importar o mesmo arquivo de novo não duplica as tarefas avulsas.
+  - Opção **"Substituir minha rotina semanal atual"**: remove as tarefas fixas de hoje em diante. O histórico dos dias passados fica.
+- **Baixar backup**: baixa tudo (categorias, clientes, rotina, tarefas avulsas, diário e histórico com tempo e notas) num arquivo `.json`, no mesmo formato.
+
+### Formato do arquivo (`rotina-import`)
+
+Arquivo JSON. Todas as listas são opcionais.
+
+```json
+{
+  "formato": "rotina-import",
+  "versao": 1,
+  "categorias": [{ "nome": "Estudos", "cor": "#f97316" }],
+  "clientes": [{ "nome": "Dorys", "categoria": "Trabalho", "observacoes": "Edição de vídeos" }],
+  "rotina": [
+    { "titulo": "Oração da manhã", "categoria": "Religião", "dias": "todos", "horario": "06:30", "duracao": 15 },
+    { "titulo": "Editar vídeo", "categoria": "Trabalho", "cliente": "Dorys", "dias": ["seg", "qua", "sex"], "horario": "09:00", "duracao": 120, "avisoAntes": 15 },
+    { "titulo": "Inglês", "categoria": "Estudos", "dias": "uteis", "horario": "20:30", "duracao": 45, "aviso": false }
+  ],
+  "tarefas": [
+    { "titulo": "Enviar orçamento", "data": "2026-10-21", "categoria": "Trabalho", "cliente": "Dorys", "horario": "14:00", "notas": "" }
+  ],
+  "diario": [{ "data": "2026-10-19", "texto": "Ideias do dia…" }]
+}
+```
+
+- **rotina**: `titulo`, `categoria` e `horario` (obrigatório na rotina), mais `dias`.
+  - `dias` aceita `"todos"`, `"uteis"`, `"fds"`, uma lista como `["seg","qua"]` ou o texto `"seg, qua, sex"`. Códigos: dom, seg, ter, qua, qui, sex, sab (também aceita números de 0 a 6, onde 0 é domingo).
+  - Opcionais: `cliente`, `duracao` (minutos), `aviso` (true/false, padrão true) e `avisoAntes` (minutos; sem ele, vale o padrão dos Ajustes).
+- **tarefas**: tarefas avulsas de um dia, com `data` no formato AAAA-MM-DD. O horário é opcional.
+- **horario** aceita `"06:30"`, `"6:30"`, `"6h30"` ou `"18h"`.
+- Categoria ou cliente que não existir é criado na hora. Cliente novo sem categoria vai para "Trabalho".
+
 ## Estrutura de dados (Firestore)
 
 Os dados de cada pessoa ficam dentro de `users/{uid}`, e cada documento também guarda o campo `uid`:
