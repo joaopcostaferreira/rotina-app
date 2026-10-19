@@ -1178,6 +1178,8 @@ function viewAjustes() {
 
     ${notifCard()}
 
+    ${importCard()}
+
     <section class="card">
       <h2 class="card-title">${icon('download')}Instalar no celular</h2>
       ${S.installEvt ? `<button type="button" class="btn primary" data-action="install">Instalar app</button>` : ''}
@@ -1379,6 +1381,327 @@ function saveJournal(d) {
   setStatus('[data-journal-status]', 'Salvo ✓');
   const list = $('#journal-list');
   if (list) list.innerHTML = journalListHTML();
+}
+
+// ---------------------------------------------------------------------------
+// Importar e exportar (arquivo .json no formato "rotina-import"; o formato está no README)
+// ---------------------------------------------------------------------------
+
+const norm = (s) =>
+  String(s ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .toLowerCase();
+
+const DIA_CODIGO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+const DIA_NOMES = {
+  dom: 0, domingo: 0,
+  seg: 1, segunda: 1, 'segunda-feira': 1,
+  ter: 2, terca: 2, 'terca-feira': 2,
+  qua: 3, quarta: 3, 'quarta-feira': 3,
+  qui: 4, quinta: 4, 'quinta-feira': 4,
+  sex: 5, sexta: 5, 'sexta-feira': 5,
+  sab: 6, sabado: 6,
+};
+
+// Aceita [1,3,5], ["seg","qua"], "seg, qua, sex", "todos", "uteis", "fds". Retorna null se não entender.
+function parseDias(v) {
+  const list = Array.isArray(v) ? v : String(v ?? '').split(/[,;]+/);
+  const out = new Set();
+  for (const raw of list) {
+    if (typeof raw === 'number') {
+      if (raw >= 0 && raw <= 6) out.add(raw);
+      else return null;
+      continue;
+    }
+    const k = norm(raw);
+    if (!k) continue;
+    if (['todos', 'todos os dias', 'diario', 'diariamente'].includes(k)) [0, 1, 2, 3, 4, 5, 6].forEach((d) => out.add(d));
+    else if (['uteis', 'dias uteis', 'seg-sex', 'seg a sex'].includes(k)) [1, 2, 3, 4, 5].forEach((d) => out.add(d));
+    else if (['fds', 'fim de semana', 'fins de semana'].includes(k)) [0, 6].forEach((d) => out.add(d));
+    else if (k in DIA_NOMES) out.add(DIA_NOMES[k]);
+    else if (/^[0-6]$/.test(k)) out.add(Number(k));
+    else return null;
+  }
+  return out.size ? [...out].sort() : null;
+}
+
+// "6:30", "06:30", "6h30", "18h" -> "06:30" / "18:00". Retorna null se não for um horário.
+function parseHora(v) {
+  if (v == null || v === '') return null;
+  const m = String(v).trim().toLowerCase().match(/^(\d{1,2})\s*(?::|h)\s*(\d{2})?\s*$/) || String(v).trim().match(/^(\d{1,2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2] || 0);
+  if (h > 23 || min > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+const isCor = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim());
+const numOuNull = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Math.max(0, Math.round(Number(v))));
+const hashId = (s) => {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+
+// Lê o arquivo e monta o plano do que vai entrar, sem gravar nada ainda.
+async function planImport(data) {
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data.trim().replace(/^```(?:json)?\s*|```\s*$/g, ''));
+    } catch {
+      throw new Error('O conteúdo não é um arquivo de importação válido (JSON).');
+    }
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Arquivo de importação inválido.');
+
+  const plan = { cats: [], clis: [], recs: [], tasks: [], diario: [], avisos: [], erros: [] };
+  const catMap = new Map(S.categories.map((c) => [norm(c.nome), c]));
+  const cliMap = new Map(S.clients.map((c) => [norm(c.nome), c]));
+  let ordem = S.categories.length ? Math.max(...S.categories.map((c) => c.ordem ?? 0)) + 1 : 0;
+
+  const getCat = (nome, cor) => {
+    if (!String(nome ?? '').trim()) return null;
+    let c = catMap.get(norm(nome));
+    if (!c) {
+      c = { id: U.newId(), nome: String(nome).trim(), cor: isCor(cor) ? cor.trim() : PALETA[(S.categories.length + plan.cats.length) % PALETA.length], ordem: ordem++ };
+      catMap.set(norm(nome), c);
+      plan.cats.push(c);
+    }
+    return c;
+  };
+  const getCli = (nome, catNome, obs) => {
+    if (!String(nome ?? '').trim()) return null;
+    let c = cliMap.get(norm(nome));
+    if (!c) {
+      const cat = getCat(catNome || 'Trabalho');
+      c = { id: U.newId(), nome: String(nome).trim(), categoriaId: cat.id, observacoes: String(obs ?? '').trim() };
+      cliMap.set(norm(nome), c);
+      plan.clis.push(c);
+    }
+    return c;
+  };
+  const aviso = (it) => ({
+    aviso: it.aviso === false || norm(it.aviso) === 'nao' ? false : true,
+    avisoAntes: numOuNull(it.avisoAntes ?? it.avisarAntes),
+  });
+
+  for (const c of Array.isArray(data.categorias) ? data.categorias : []) {
+    const nome = typeof c === 'string' ? c : c?.nome;
+    if (!getCat(nome, c?.cor)) plan.erros.push('Categoria sem nome ignorada.');
+  }
+  for (const c of Array.isArray(data.clientes) ? data.clientes : []) {
+    const nome = typeof c === 'string' ? c : c?.nome;
+    if (!getCli(nome, c?.categoria, c?.observacoes)) plan.erros.push('Cliente sem nome ignorado.');
+  }
+
+  const recKeys = new Set();
+  const recKey = (r) => [norm(r.titulo), r.categoriaId, r.clienteId || '', r.horario].join('|');
+  S.recurring.forEach((r) => recKeys.add(recKey(r)));
+  for (const it of Array.isArray(data.rotina) ? data.rotina : []) {
+    const titulo = String(it?.titulo ?? '').trim();
+    const rotulo = titulo || '(sem título)';
+    if (!titulo) { plan.erros.push('Tarefa fixa sem título ignorada.'); continue; }
+    const dias = parseDias(it.dias ?? it.diasDaSemana);
+    if (!dias) { plan.erros.push(`“${rotulo}”: dias da semana não entendidos (${JSON.stringify(it.dias ?? '')}).`); continue; }
+    const horario = parseHora(it.horario);
+    if (!horario) { plan.erros.push(`“${rotulo}”: na rotina o horário é obrigatório.`); continue; }
+    if (!it.categoria) plan.avisos.push(`“${rotulo}”: sem categoria, ficou em “Geral”.`);
+    const cat = getCat(it.categoria || 'Geral');
+    const cli = getCli(it.cliente, it.categoria);
+    const r = { id: U.newId(), titulo, categoriaId: cat.id, clienteId: cli?.id || null, diasDaSemana: dias, horario, duracao: numOuNull(it.duracao), ...aviso(it), ativo: true, inicio: U.todayStr() };
+    const k = recKey(r);
+    r._duplicada = recKeys.has(k);
+    recKeys.add(k);
+    plan.recs.push(r);
+  }
+
+  for (const it of Array.isArray(data.tarefas) ? data.tarefas : []) {
+    const titulo = String(it?.titulo ?? '').trim();
+    if (!titulo) { plan.erros.push('Tarefa avulsa sem título ignorada.'); continue; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(it.data ?? ''))) { plan.erros.push(`“${titulo}”: data inválida (use AAAA-MM-DD).`); continue; }
+    if (it.horario && !parseHora(it.horario)) plan.avisos.push(`“${titulo}”: horário não entendido, ficou sem horário.`);
+    const cat = getCat(it.categoria || 'Geral');
+    const cli = getCli(it.cliente, it.categoria);
+    plan.tasks.push({
+      // id fixo: importar o mesmo arquivo de novo atualiza a tarefa em vez de duplicar.
+      id: `imp_${hashId(`${it.data}|${norm(titulo)}|${cli?.id || ''}`)}`,
+      titulo, data: it.data, categoriaId: cat.id, clienteId: cli?.id || null,
+      horario: parseHora(it.horario), duracao: numOuNull(it.duracao), ...aviso(it),
+      notas: String(it.notas ?? ''), concluido: !!it.concluido, origem: 'avulsa', recurringTaskId: null, removido: false,
+    });
+  }
+
+  const diario = Array.isArray(data.diario) ? data.diario : [];
+  if (diario.length) {
+    const atuais = Object.fromEntries((await db.list('journal')).map((j) => [j.id, j.texto || '']));
+    for (const it of diario) {
+      const texto = String(it?.texto ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(it?.data ?? '')) || !texto) { plan.erros.push('Entrada do diário sem data ou sem texto ignorada.'); continue; }
+      const atual = atuais[it.data] || '';
+      if (atual.includes(texto)) continue;
+      plan.diario.push({ data: it.data, texto: atual.trim() ? `${atual.trimEnd()}\n\n${texto}` : texto });
+    }
+  }
+  return plan;
+}
+
+let pendingImport = null;
+
+function openImportPreview(plan) {
+  pendingImport = plan;
+  const novas = plan.recs.filter((r) => !r._duplicada);
+  const dup = plan.recs.length - novas.length;
+  const lista = (arr, fmt) => `<ul class="imp-list">${arr.map((x) => `<li>${fmt(x)}</li>`).join('')}</ul>`;
+  const catNome = (id) => esc((catById(id) || plan.cats.find((c) => c.id === id))?.nome || '');
+  const cliNome = (id) => esc((cliById(id) || plan.clis.find((c) => c.id === id))?.nome || '');
+  const nada = !plan.cats.length && !plan.clis.length && !plan.recs.length && !plan.tasks.length && !plan.diario.length;
+  const porDia = U.ORDEM_SEMANA.map((d) => `${U.DIAS_CURTO[d]} ${plan.recs.filter((r) => r.diasDaSemana.includes(d)).length}`).join(' · ');
+
+  openModal(`<div class="modal-body import-preview">
+    ${modalHead('Importar')}
+    ${nada ? '<p class="note">Não encontrei nada para importar neste arquivo.</p>' : ''}
+    ${plan.cats.length ? `<section><h3>${plan.cats.length} categoria${plan.cats.length > 1 ? 's' : ''} nova${plan.cats.length > 1 ? 's' : ''}</h3>${lista(plan.cats, (c) => `<i class="dot" style="--c:${c.cor}"></i>${esc(c.nome)}`)}</section>` : ''}
+    ${plan.clis.length ? `<section><h3>${plan.clis.length} cliente${plan.clis.length > 1 ? 's' : ''} novo${plan.clis.length > 1 ? 's' : ''}</h3>${lista(plan.clis, (c) => `${esc(c.nome)} <small class="muted">${catNome(c.categoriaId)}</small>`)}</section>` : ''}
+    ${
+      plan.recs.length
+        ? `<section><h3>${plan.recs.length} tarefa${plan.recs.length > 1 ? 's' : ''} da rotina semanal</h3>
+        <p class="muted sm">${porDia}</p>
+        ${lista(
+          [...plan.recs].sort(U.byHorarioTitulo),
+          (r) => `<span class="imp-time">${r.horario}</span>${esc(r.titulo)} <small class="muted">${catNome(r.categoriaId)}${r.clienteId ? ` · ${cliNome(r.clienteId)}` : ''}</small> ${dayDots(r.diasDaSemana, 'sm')}${r._duplicada ? ' <small class="muted">(já existe)</small>' : ''}`,
+        )}</section>`
+        : ''
+    }
+    ${plan.tasks.length ? `<section><h3>${plan.tasks.length} tarefa${plan.tasks.length > 1 ? 's' : ''} avulsa${plan.tasks.length > 1 ? 's' : ''}</h3>${lista([...plan.tasks].sort((a, b) => a.data.localeCompare(b.data)), (t) => `<span class="imp-time">${esc(U.fmtDiaCurto(t.data))}</span>${esc(t.titulo)}`)}</section>` : ''}
+    ${plan.diario.length ? `<section><h3>${plan.diario.length} dia${plan.diario.length > 1 ? 's' : ''} de diário</h3></section>` : ''}
+    ${plan.avisos.length ? `<section class="imp-warn"><h3>Observações</h3>${lista(plan.avisos, esc)}</section>` : ''}
+    ${plan.erros.length ? `<section class="imp-err"><h3>Ignorados</h3>${lista(plan.erros, esc)}</section>` : ''}
+    ${
+      plan.recs.length && S.recurring.length
+        ? `<label class="switch-row imp-replace"><input type="checkbox" data-import-replace><span class="switch" aria-hidden="true"></span>
+        <span>Substituir minha rotina semanal atual <small class="muted">(remove as ${S.recurring.length} tarefas fixas de hoje em diante; o histórico fica)</small></span></label>
+        ${dup ? `<p class="hint">${dup} tarefa${dup > 1 ? 's' : ''} igua${dup > 1 ? 'is' : 'l'} às que você já tem ${dup > 1 ? 'serão puladas' : 'será pulada'}, a não ser que você substitua a rotina.</p>` : ''}`
+        : ''
+    }
+    <footer class="modal-actions"><span class="grow"></span>
+      <button type="button" class="btn ghost" data-action="close-modal">Cancelar</button>
+      ${nada ? '' : `<button type="button" class="btn primary" data-action="import-confirm">${icon('check')}Importar</button>`}
+    </footer>
+  </div>`);
+}
+
+async function applyImport(plan, substituir) {
+  const today = U.todayStr();
+  const ops = [];
+  const set = (col, x) => {
+    const { _duplicada, ...data } = x;
+    ops.push({ type: 'set', col, id: x.id, data });
+  };
+
+  if (substituir) {
+    // Mesma regra de excluir uma tarefa fixa: some dos próximos dias, o passado e o concluído ficam.
+    const futuras = await db.range('dailyTasks', 'data', today, '9999-12-31');
+    futuras.filter((t) => t.origem === 'fixa' && !t.concluido).forEach((t) => ops.push({ type: 'delete', col: 'dailyTasks', id: t.id }));
+    S.recurring.forEach((r) => ops.push({ type: 'delete', col: 'recurringTasks', id: r.id }));
+    S.recurring = [];
+  }
+  const recs = plan.recs.filter((r) => substituir || !r._duplicada);
+
+  plan.cats.forEach((c) => set('categories', c));
+  plan.clis.forEach((c) => set('clients', c));
+  recs.forEach((r) => set('recurringTasks', r));
+  plan.tasks.forEach((t) => set('dailyTasks', t));
+  plan.diario.forEach((j) => ops.push({ type: 'set', col: 'journal', id: j.data, data: { data: j.data, texto: j.texto, atualizadoEm: Date.now() } }));
+
+  S.categories.push(...plan.cats);
+  sortCats();
+  S.clients.push(...plan.clis);
+  S.recurring.push(...recs.map(({ _duplicada, ...r }) => r));
+  S.days = {};
+  S.ensured = new Set();
+  S.ranges = new Set();
+  S.journal = null;
+  persist(db.batch(ops));
+
+  const partes = [
+    plan.cats.length && `${plan.cats.length} categoria(s)`,
+    plan.clis.length && `${plan.clis.length} cliente(s)`,
+    recs.length && `${recs.length} tarefa(s) da rotina`,
+    plan.tasks.length && `${plan.tasks.length} tarefa(s) avulsa(s)`,
+    plan.diario.length && `${plan.diario.length} dia(s) de diário`,
+  ].filter(Boolean);
+  closeModal();
+  toast(partes.length ? `Importado: ${partes.join(', ')}.` : 'Nada novo para importar.');
+  location.hash = recs.length ? '#/rotina' : '#/hoje';
+  render();
+}
+
+// Backup de tudo, no mesmo formato da importação (mais o histórico, que serve só para guardar).
+async function exportData() {
+  const [tarefas, diario] = await Promise.all([db.list('dailyTasks'), db.list('journal')]);
+  const catNome = (id) => catById(id)?.nome || null;
+  const cliNome = (id) => cliById(id)?.nome || null;
+  const limpa = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined && v !== ''));
+  const data = {
+    formato: 'rotina-import',
+    versao: 1,
+    exportadoEm: new Date().toISOString(),
+    categorias: S.categories.map((c) => ({ nome: c.nome, cor: c.cor })),
+    clientes: S.clients.map((c) => limpa({ nome: c.nome, categoria: catNome(c.categoriaId), observacoes: c.observacoes })),
+    rotina: [...S.recurring].sort(U.byHorarioTitulo).map((r) =>
+      limpa({
+        titulo: r.titulo, categoria: catNome(r.categoriaId), cliente: cliNome(r.clienteId),
+        dias: (r.diasDaSemana || []).map((d) => DIA_CODIGO[d]), horario: r.horario, duracao: r.duracao,
+        aviso: r.aviso === false ? false : undefined, avisoAntes: r.avisoAntes,
+      }),
+    ),
+    tarefas: tarefas
+      .filter((t) => t.origem !== 'fixa' && !t.removido)
+      .sort((a, b) => a.data.localeCompare(b.data))
+      .map((t) => limpa({ titulo: t.titulo, data: t.data, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), horario: t.horario, duracao: t.duracao, notas: t.notas, concluido: t.concluido || undefined })),
+    diario: diario.filter((j) => j.texto?.trim()).sort((a, b) => a.id.localeCompare(b.id)).map((j) => ({ data: j.id, texto: j.texto })),
+    historico: tarefas
+      .filter((t) => !t.removido && (t.concluido || t.tempoGasto || t.notas?.trim()))
+      .sort((a, b) => a.data.localeCompare(b.data))
+      .map((t) => limpa({ data: t.data, titulo: t.titulo, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), concluido: t.concluido || undefined, minutos: t.tempoGasto ? Math.round(t.tempoGasto / 60) : undefined, notas: t.notas })),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `rotina-backup-${U.todayStr()}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('Backup baixado.');
+}
+
+function importCard() {
+  return `<section class="card">
+    <h2 class="card-title">${icon('download')}Importar e exportar</h2>
+    <p class="muted sm">Importe uma rotina pronta (o arquivo que o Claude monta para você) ou baixe um backup de tudo.</p>
+    <div class="btn-row">
+      <label class="btn primary">${icon('plus')}Importar arquivo<input type="file" accept=".json,.txt,application/json,text/plain" data-import-file hidden></label>
+      <button type="button" class="btn ghost" data-action="export">${icon('download')}Baixar backup</button>
+    </div>
+    <details class="imp-paste">
+      <summary>Ou cole o conteúdo aqui</summary>
+      <textarea rows="6" data-import-text placeholder='{ "formato": "rotina-import", ... }' spellcheck="false"></textarea>
+      <button type="button" class="btn soft sm" data-action="import-text">Ver o que será importado</button>
+    </details>
+  </section>`;
+}
+
+async function startImport(content) {
+  try {
+    openImportPreview(await planImport(content));
+  } catch (err) {
+    console.error(err);
+    toast(err.message || errMsg(err));
+  }
 }
 
 // Tela Acessos (só administradores): quais e-mails podem entrar no app.
@@ -2198,6 +2521,18 @@ const ACTIONS = {
     S.installEvt = null;
     render();
   },
+  'import-text': () => {
+    const txt = $('[data-import-text]')?.value || '';
+    if (!txt.trim()) return toast('Cole o conteúdo do arquivo primeiro.');
+    startImport(txt);
+  },
+  'import-confirm': () => {
+    if (!pendingImport) return;
+    const plan = pendingImport;
+    pendingImport = null;
+    return applyImport(plan, !!modal.querySelector('[data-import-replace]')?.checked);
+  },
+  export: () => exportData(),
   'reset-demo': async () => {
     if (!(await ask('Apagar todos os dados de demonstração deste navegador?', 'Apagar'))) return;
     resetDemo();
@@ -2241,7 +2576,13 @@ document.addEventListener('submit', async (e) => {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.matches('[data-cat-select]')) {
+  if (t.matches('[data-import-file]')) {
+    const file = t.files?.[0];
+    t.value = '';
+    if (!file) return;
+    if (file.size > 5_000_000) return toast('Arquivo grande demais para importar.');
+    file.text().then(startImport, (err) => toast(errMsg(err)));
+  } else if (t.matches('[data-cat-select]')) {
     const field = t.form.querySelector('[data-client-field]');
     field.hidden = !clientsOf(t.value).length;
     field.querySelector('select').innerHTML = clientOptions(t.value, '');
