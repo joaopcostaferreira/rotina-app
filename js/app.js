@@ -54,7 +54,9 @@ const S = {
   calMonth: U.todayStr().slice(0, 7),
   calSel: U.todayStr(),
   rotinaDia: 'all',
-  filtro: { status: 'todas', cat: '', cli: '' }, // filtros da tela Hoje
+  relPeriodo: 'semana', // Relatórios: 'hoje' | 'semana' | 'mes'
+  relMes: U.todayStr().slice(0, 7),
+  pedirConclusao: null, // tarefa pausada em Hoje: mostra o ✓ "Finalizou?" ao lado do cronômetro
   diarioDate: U.todayStr(), // dia aberto no Diário
   journal: null, // entradas do Diário (data -> { texto })
   journalBusca: '',
@@ -70,16 +72,16 @@ const pending = { days: {}, ranges: {} };
 const NAV = [
   { id: 'painel', label: 'Painel' },
   { id: 'hoje', label: 'Hoje' },
-  { id: 'horarios', label: 'Horários' },
   { id: 'calendario', label: 'Calendário' },
   { id: 'diario', label: 'Diário' },
   { id: 'rotina', label: 'Rotina' },
   { id: 'clientes', label: 'Clientes' },
+  { id: 'relatorios', label: 'Relatórios' },
   { id: 'categorias', label: 'Categorias' },
   { id: 'ajustes', label: 'Ajustes' },
   { id: 'acessos', label: 'Acessos', admin: true },
 ];
-const TABS = ['hoje', 'horarios', 'calendario', 'painel'];
+const TABS = ['hoje', 'calendario', 'painel', 'diario'];
 const navItems = () => NAV.filter((n) => !n.admin || S.isAdmin);
 const navLabel = (id) => NAV.find((n) => n.id === id)?.label || '';
 
@@ -94,7 +96,14 @@ const modal = document.getElementById('modal');
 const catById = (id) => S.categories.find((c) => c.id === id);
 const cliById = (id) => S.clients.find((c) => c.id === id);
 const colorOf = (t) => catById(t.categoriaId)?.cor || '#94a3b8';
-const clientsOf = (catId) => S.clients.filter((c) => c.categoriaId === catId).sort(U.byNome);
+// Clientes são só do Trabalho: a categoria com "trabalho" no nome (ou, se ela foi renomeada, a que tiver clientes).
+const workCatId = () =>
+  S.categories.find((c) => /trabalho/i.test(c.nome))?.id ||
+  S.categories.find((c) => S.clients.some((x) => x.categoriaId === c.id))?.id ||
+  null;
+const isWork = (catId) => !!catId && catId === workCatId();
+const workColor = () => catById(workCatId())?.cor || '#0ea5e9';
+const clientsOf = (catId) => (isWork(catId) ? [...S.clients].sort(U.byNome) : []);
 const visible = (tasks) => (tasks || []).filter((t) => !t.removido);
 const duracao = (t) => t.duracao || S.profile.duracaoPadrao || 30;
 const firstName = () => S.profile.apelido || (S.user?.nome || '').split(' ')[0] || 'você';
@@ -421,7 +430,8 @@ function seed() {
 const isWide = () => matchMedia('(min-width: 900px)').matches;
 
 function currentRoute() {
-  const r = location.hash.replace(/^#\/?/, '');
+  let r = location.hash.replace(/^#\/?/, '');
+  if (r === 'horarios') r = 'hoje'; // a antiga tela Horários agora é a Hoje
   if (VIEWS[r] && navItems().some((n) => n.id === r)) return r;
   return isWide() ? 'painel' : 'hoje';
 }
@@ -465,7 +475,7 @@ function render() {
 }
 
 function afterRender(r) {
-  if (r === 'horarios' && !S.scrolledNow) {
+  if (r === 'hoje' && !S.scrolledNow) {
     const line = $('.now-line');
     if (line) {
       line.scrollIntoView({ block: 'center' });
@@ -510,7 +520,7 @@ function loginHTML() {
     <div class="login-card">
       ${LOGO}
       <h1>Rotina</h1>
-      <p class="lead">Sua to-do list diária por categorias, com clientes, rotina semanal e um quadro de horários.</p>
+      <p class="lead">Sua to-do list diária por categorias, com clientes, rotina semanal e a agenda do dia com horários.</p>
       <button type="button" class="btn google" data-action="login">${isDemo ? icon('sparkle') : GOOGLE}<span>${isDemo ? 'Entrar no modo demonstração' : 'Entrar com Google'}</span></button>
       ${
         isDemo
@@ -614,44 +624,13 @@ function taskRow(t, { showCat = false } = {}) {
       <span class="task-title">${esc(t.titulo)}</span>
       ${meta ? `<span class="task-meta">${meta}</span>` : ''}
     </div>
+    ${S.pedirConclusao === t.id && !t.concluido ? `<button type="button" class="b-done" data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}<span>Finalizou?</span></button>` : ''}
     ${timerHTML(t)}
     <div class="task-actions">
       <button type="button" class="icon-btn sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Editar">${icon('edit')}</button>
       <button type="button" class="icon-btn sm" data-action="remove-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Remover deste dia">${icon('trash')}</button>
     </div>
   </li>`;
-}
-
-// Lista do dia agrupada por categoria e, dentro dela, por cliente.
-function groupedList(tasks) {
-  const v = visible(tasks);
-  const groups = [...S.categories, { id: '_sem', nome: 'Sem categoria', cor: '#94a3b8' }];
-  const keyOf = (t) => (catById(t.categoriaId) ? t.categoriaId : '_sem');
-  return `<div class="groups">${groups
-    .map((cat) => {
-      const list = v.filter((t) => keyOf(t) === cat.id);
-      if (!list.length) return '';
-      const p = progress(list);
-      const direct = list.filter((t) => !cliById(t.clienteId)).sort(U.byHorarioTitulo);
-      const byClient = [...new Set(list.map((t) => t.clienteId).filter((id) => cliById(id)))]
-        .map(cliById)
-        .sort(U.byNome);
-      return `<section class="group card" style="--c:${cat.cor}">
-        <header class="group-head"><i class="dot"></i><h2>${esc(cat.nome)}</h2>${timeTotal(list)}<span class="count">${p.done}/${p.total}</span></header>
-        ${direct.length ? `<ul class="tasks">${direct.map((t) => taskRow(t)).join('')}</ul>` : ''}
-        ${byClient
-          .map((cli) => {
-            const ct = list.filter((t) => t.clienteId === cli.id).sort(U.byHorarioTitulo);
-            const cp = progress(ct);
-            return `<div class="client-group">
-              <h3>${icon('clientes')}<span>${esc(cli.nome)}</span>${timeTotal(ct)}<span class="count">${cp.done}/${cp.total}</span></h3>
-              <ul class="tasks">${ct.map((t) => taskRow(t)).join('')}</ul>
-            </div>`;
-          })
-          .join('')}
-      </section>`;
-    })
-    .join('')}</div>`;
 }
 
 function emptyState(title, text) {
@@ -701,7 +680,7 @@ function viewPainel() {
     p.total === 0 ? 'Nenhuma tarefa para hoje.' : p.done === p.total ? 'Tudo feito hoje. 🎉' : `Faltam ${p.total - p.done}.`;
 
   const blockLine = (t) =>
-    `<button type="button" class="now-item" style="--c:${colorOf(t)}" data-action="go" data-route="horarios" data-date="${today}">
+    `<button type="button" class="now-item" style="--c:${colorOf(t)}" data-action="go" data-route="hoje" data-date="${today}">
       <span class="now-time">${t.horario}–${U.fromMin(U.toMin(t.horario) + duracao(t))}</span>
       <span class="now-title${t.concluido ? ' done' : ''}">${esc(t.titulo)}</span>
       <span class="now-sub">${esc([catById(t.categoriaId)?.nome, cliById(t.clienteId)?.nome].filter(Boolean).join(' · '))}</span>
@@ -720,7 +699,7 @@ function viewPainel() {
     .sort(U.byNome)
     .map((cli) => {
       const cp = progress(v.filter((t) => t.clienteId === cli.id));
-      const cor = catById(cli.categoriaId)?.cor || '#94a3b8';
+      const cor = workColor();
       return `<li style="--c:${cor}"><i class="dot"></i><span class="name">${esc(cli.nome)}</span>
         ${cp.total ? `<span class="bar"><i style="width:${cp.pct}%"></i></span><span class="count">${cp.done}/${cp.total}</span>` : '<span class="muted sm">sem tarefas hoje</span>'}</li>`;
     })
@@ -737,8 +716,8 @@ function viewPainel() {
       <div>
         <h2>${p.done} de ${p.total} concluídas</h2>
         <p class="muted">${msg}</p>
-        ${sumTime(v) >= 60 ? `<p class="muted sm hero-time">${icon('cronometro')}Tempo registrado hoje: <strong>${U.fmtDur(sumTime(v))}</strong></p>` : ''}
-        <a class="btn soft sm" href="#/hoje" data-action="go" data-route="hoje" data-date="${today}">Abrir lista de hoje</a>
+        ${sumTime(v) >= 60 ? `<p class="muted sm hero-time">${icon('cronometro')}Tempo registrado hoje: <strong>${U.fmtDur(sumTime(v))}</strong> · <a href="#/relatorios">ver relatórios</a></p>` : ''}
+        <a class="btn soft sm" href="#/hoje" data-action="go" data-route="hoje" data-date="${today}">Abrir o dia</a>
       </div>
     </section>
     <section class="card now">
@@ -788,75 +767,35 @@ function viewPainel() {
   </div>`;
 }
 
+// Hoje: a agenda do dia com os horários. Em cada bloco: ✓ concluir, cronômetro (play/pausa) e notas.
+// As horas com tarefa ficam altas (cabem os botões) e as horas vazias ficam baixinhas.
+const ALTURA_HORA_CHEIA = 150; // px por hora com tarefa (15 min = 37 px)
+const ALTURA_HORA_VAZIA = 34; // px por hora sem nada
+
+function blockTools(t, { compact = false } = {}) {
+  const pedir = S.pedirConclusao === t.id && !t.concluido;
+  return `<div class="b-tools">
+    ${pedir ? `<button type="button" class="b-done" data-action="toggle" data-id="${t.id}" data-date="${t.data}" title="Marcar como concluída">${icon('check')}${compact ? '' : '<span>Finalizou?</span>'}</button>` : ''}
+    ${timerHTML(t)}
+    <button type="button" class="icon-btn xs${t.notas?.trim() ? ' has-notes' : ''}" data-action="open-task" data-id="${t.id}" data-date="${t.data}"
+      aria-label="Notas de ${esc(t.titulo)}" title="${t.notas?.trim() ? 'Ver notas' : 'Escrever uma nota'}">${icon('nota')}</button>
+  </div>`;
+}
+
 function viewHoje() {
   const tasks = dayTasks(S.date);
   const head = `<header class="page-head">${dayNav(S.date)}
     <button type="button" class="btn primary" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button></header>`;
   if (!tasks) return head + loading();
-  const p = progress(tasks);
-  if (!p.total) {
-    return head + emptyState('Nada para este dia', 'Monte sua <a href="#/rotina">rotina semanal</a> ou adicione uma tarefa avulsa.');
+  const v = visible(tasks);
+  if (!v.length) {
+    return head + emptyState('Nada para este dia', 'Monte sua <a href="#/rotina">rotina semanal</a> ou adicione uma tarefa só para este dia.');
   }
-
-  const F = S.filtro;
-  if (F.cat && !catById(F.cat)) F.cat = '';
-  if (F.cli && (!cliById(F.cli) || (F.cat && cliById(F.cli).categoriaId !== F.cat))) F.cli = '';
-  const v = visible(tasks);
-  const byCatCli = v.filter((t) => (!F.cat || t.categoriaId === F.cat) && (!F.cli || t.clienteId === F.cli));
-  const pend = byCatCli.filter((t) => !t.concluido);
-  const late = pend.filter(isLate);
-  const filtered = byCatCli.filter((t) =>
-    F.status === 'pendentes' ? !t.concluido : F.status === 'concluidas' ? t.concluido : F.status === 'atrasadas' ? isLate(t) : true,
-  );
-  const statusBtn = (id, label, n) =>
-    `<button type="button" class="tab-chip${F.status === id ? ' on' : ''}" data-action="filtro-status" data-status="${id}">${label}<span>${n}</span></button>`;
-  const clientList = (F.cat ? clientsOf(F.cat) : [...S.clients].sort(U.byNome)).filter((c) => v.some((t) => t.clienteId === c.id));
-  const catsWithTasks = S.categories.filter((c) => v.some((t) => t.categoriaId === c.id));
-  const active = F.status !== 'todas' || F.cat || F.cli;
-
-  return `${head}
-    <div class="progress-line"><span class="bar"><i style="width:${p.pct}%"></i></span><span>${p.done} de ${p.total} concluídas</span></div>
-    <div class="filters">
-      <div class="tab-chips">
-        ${statusBtn('todas', 'Todas', byCatCli.length)}
-        ${statusBtn('pendentes', 'Pendentes', pend.length)}
-        ${late.length ? statusBtn('atrasadas', 'Atrasadas', late.length) : ''}
-        ${statusBtn('concluidas', 'Concluídas', byCatCli.length - pend.length)}
-      </div>
-      <div class="filter-selects">
-        <select data-filter="cat" aria-label="Filtrar por categoria">
-          <option value="">Todas as categorias</option>
-          ${catsWithTasks.map((c) => `<option value="${c.id}" ${c.id === F.cat ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
-        </select>
-        ${
-          clientList.length
-            ? `<select data-filter="cli" aria-label="Filtrar por cliente">
-          <option value="">Todos os clientes</option>
-          ${clientList.map((c) => `<option value="${c.id}" ${c.id === F.cli ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
-        </select>`
-            : ''
-        }
-        ${active ? `<button type="button" class="link" data-action="filtro-limpar">Limpar filtros</button>` : ''}
-      </div>
-    </div>
-    ${
-      filtered.length
-        ? groupedList(filtered)
-        : emptyState(
-            F.status === 'pendentes' && !F.cat && !F.cli ? 'Tudo concluído 🎉' : 'Nada com esses filtros',
-            active ? '<button type="button" class="link" data-action="filtro-limpar">Limpar filtros</button>' : '',
-          )
-    }`;
-}
-
-function viewHorarios() {
-  const tasks = dayTasks(S.date);
-  const head = `<header class="page-head">${dayNav(S.date)}
-    <button type="button" class="btn primary" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button></header>`;
-  if (!tasks) return head + loading();
-  const v = visible(tasks);
+  const p = progress(tasks);
   const timed = v.filter((t) => t.horario).sort(U.byHorarioTitulo);
   const untimed = v.filter((t) => !t.horario).sort(U.byHorarioTitulo);
+  const isToday = S.date === U.todayStr();
+  const now = U.nowMin();
 
   let start = (S.profile.agendaInicio ?? 6) * 60;
   let end = Math.max((S.profile.agendaFim ?? 23) * 60, start + 60);
@@ -864,10 +803,25 @@ function viewHorarios() {
     start = Math.min(start, Math.floor(U.toMin(t.horario) / 60) * 60);
     end = Math.max(end, Math.min(24 * 60, Math.ceil((U.toMin(t.horario) + duracao(t)) / 60) * 60));
   }
-  const hours = (end - start) / 60;
+  const items = timed.map((t) => ({ t, s: U.toMin(t.horario), e: Math.min(U.toMin(t.horario) + duracao(t), 24 * 60) }));
+
+  // Altura de cada hora e a posição (px) de cada minuto.
+  const hours = [];
+  let top = 0;
+  for (let h = start; h < end; h += 60) {
+    const cheia = items.some((x) => x.s < h + 60 && x.e > h);
+    const alt = cheia ? ALTURA_HORA_CHEIA : ALTURA_HORA_VAZIA;
+    hours.push({ h, top, alt });
+    top += alt;
+  }
+  const total = top;
+  const y = (min) => {
+    if (min >= end) return total;
+    const hr = hours[Math.max(0, Math.floor((min - start) / 60))];
+    return hr.top + ((min - hr.h) / 60) * hr.alt;
+  };
 
   // Distribui em colunas os blocos que se sobrepõem.
-  const items = timed.map((t) => ({ t, s: U.toMin(t.horario), e: Math.min(U.toMin(t.horario) + duracao(t), 24 * 60) }));
   let cluster = [];
   let clusterEnd = -1;
   const flush = () => {
@@ -886,48 +840,53 @@ function viewHorarios() {
   }
   if (cluster.length) flush();
 
-  const isToday = S.date === U.todayStr();
-  const now = U.nowMin();
   const blocks = items
     .map(({ t, s, e, col, cols }) => {
       const cli = cliById(t.clienteId);
       const isNow = isToday && s <= now && now < e;
-      const short = e - s < 40;
-      return `<button type="button" class="block${t.concluido ? ' done' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}"
-        style="--c:${colorOf(t)};top:calc(var(--h) * ${(s - start) / 60});height:calc(var(--h) * ${(e - s) / 60});left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})"
-        data-action="open-task" data-id="${t.id}" data-date="${t.data}">
-        <span class="block-time">${t.horario}–${U.fromMin(e)}</span>
-        <span class="block-title">${esc(t.titulo)}</span>
-        ${cli ? `<span class="block-sub">${esc(cli.nome)}</span>` : ''}
-      </button>`;
+      const altura = y(e) - y(s);
+      const short = altura < 60;
+      const late = isLate(t);
+      const sub = [cli?.nome, late ? 'Atrasada' : ''].filter(Boolean).join(' · ');
+      return `<div class="block${t.concluido ? ' done' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
+        style="--c:${colorOf(t)};top:${y(s)}px;height:${altura}px;left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})">
+        <button type="button" class="check b-check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
+          data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
+        <div class="b-text" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir cronômetro e notas">
+          <span class="block-time">${t.horario}–${U.fromMin(e)}</span>
+          <span class="block-title">${esc(t.titulo)}</span>
+          ${sub ? `<span class="block-sub">${esc(sub)}</span>` : ''}
+        </div>
+        ${blockTools(t, { compact: short || cols > 1 })}
+      </div>`;
     })
     .join('');
 
-  const hourLines = Array.from(
-    { length: hours + 1 },
-    (_, i) => `<div class="hour" style="--i:${i}"><span>${U.fromMin(start + i * 60)}</span></div>`,
-  ).join('');
+  const hourLines = hours
+    .map(({ h, top: tp, alt }) => `<div class="hour${alt === ALTURA_HORA_VAZIA ? ' free' : ''}" style="top:${tp}px"><span>${U.fromMin(h)}</span></div>`)
+    .join('') + `<div class="hour" style="top:${total}px"><span>${U.fromMin(end)}</span></div>`;
   const nowLine =
     isToday && now >= start && now <= end
-      ? `<div class="now-line" style="top:calc(var(--h) * ${(now - start) / 60})"><span>${U.fromMin(now)}</span></div>`
+      ? `<div class="now-line" style="top:${y(now)}px"><span>${U.fromMin(now)}</span></div>`
       : '';
+  const tempo = sumTime(v);
 
   return `${head}
-  <p class="muted sm intro">Quadro só para consulta: mostra o que você planejou para cada horário. Para concluir, use a <a href="#/hoje">lista do dia</a>.</p>
+  <div class="progress-line"><span class="bar"><i style="width:${p.pct}%"></i></span>
+    <span>${p.done} de ${p.total} concluídas${tempo >= 60 ? ` · ${icon('cronometro')}${U.fmtDur(tempo)}` : ''}</span></div>
   <div class="agenda-wrap">
     <div class="card timeline-card">
-      <div class="timeline" style="--rows:${hours}">${hourLines}<div class="blocks">${blocks}</div>${nowLine}</div>
+      ${
+        timed.length
+          ? `<div class="timeline" style="height:${total}px">${hourLines}<div class="blocks">${blocks}</div>${nowLine}</div>`
+          : '<p class="muted">Nenhuma tarefa com horário neste dia.</p>'
+      }
     </div>
     <aside class="card untimed">
       <h2 class="card-title">Sem horário <span class="count">${untimed.length}</span></h2>
       ${
         untimed.length
-          ? `<ul class="untimed-list">${untimed
-              .map(
-                (t) =>
-                  `<li style="--c:${colorOf(t)}" class="${t.concluido ? 'done' : ''}"><i class="dot"></i><span>${esc(t.titulo)}</span></li>`,
-              )
-              .join('')}</ul>`
+          ? `<ul class="tasks">${untimed.map((t) => taskRow(t, { showCat: true })).join('')}</ul>`
           : '<p class="muted sm">Todas as tarefas têm horário.</p>'
       }
     </aside>
@@ -966,8 +925,8 @@ function viewCalendario() {
     const v = visible(tasks).sort(U.byHorarioTitulo);
     const removed = tasks.filter((t) => t.removido);
     panel = `
-      ${v.length ? `<ul class="tasks">${v.map((t) => taskRow(t, { showCat: true })).join('')}</ul>` : '<p class="muted">Nenhuma tarefa neste dia.</p>'}
-      <button type="button" class="btn soft block" data-action="new-daily" data-date="${S.calSel}">${icon('plus')}Adicionar tarefa só neste dia</button>
+      ${v.length ? `<ul class="tasks">${v.map((t) => taskRow(t, { showCat: true })).join('')}</ul>` : '<p class="muted day-empty">Nenhuma tarefa neste dia.</p>'}
+       <button type="button" class="btn soft full" data-action="new-daily" data-date="${S.calSel}">${icon('plus')}Adicionar tarefa só neste dia</button>
       ${
         removed.length
           ? `<details class="removed"><summary>${removed.length} tarefa${removed.length > 1 ? 's' : ''} da rotina removida${removed.length > 1 ? 's' : ''} deste dia</summary>
@@ -998,10 +957,6 @@ function viewCalendario() {
     <section class="card day-panel" id="day-panel">
       <header class="panel-head">
         <div><p class="eyebrow">${esc(U.relativo(S.calSel))}</p><h2>${esc(U.fmtDiaLongo(S.calSel))}</h2></div>
-        <div class="panel-links">
-          <button type="button" class="btn ghost sm" data-action="go" data-route="hoje" data-date="${S.calSel}">Lista</button>
-          <button type="button" class="btn ghost sm" data-action="go" data-route="horarios" data-date="${S.calSel}">Horários</button>
-        </div>
       </header>
       ${panel}
       <p class="muted sm">Alterações aqui valem só para este dia. A rotina semanal continua igual.</p>
@@ -1063,8 +1018,6 @@ function viewRotina() {
 
 function viewClientes() {
   const todayTasks = visible(dayTasks(U.todayStr()) || []);
-  const groups = [...S.categories, { id: '_sem', nome: 'Sem categoria', cor: '#94a3b8' }];
-  const keyOf = (c) => (catById(c.categoriaId) ? c.categoriaId : '_sem');
 
   const card = (cli, cor) => {
     const recs = S.recurring.filter((r) => r.clienteId === cli.id).sort(U.byHorarioTitulo);
@@ -1088,25 +1041,20 @@ function viewClientes() {
           : '<p class="muted sm">Sem tarefas fixas.</p>'
       }
       <footer>
-        <button type="button" class="btn soft sm" data-action="new-rec" data-cat="${cli.categoriaId || ''}" data-cli="${cli.id}">${icon('rotina')}Tarefa fixa</button>
-        <button type="button" class="btn ghost sm" data-action="new-daily" data-date="${U.todayStr()}" data-cat="${cli.categoriaId || ''}" data-cli="${cli.id}">${icon('plus')}Tarefa avulsa</button>
+        <button type="button" class="btn soft sm" data-action="new-rec" data-cat="${workCatId() || ''}" data-cli="${cli.id}">${icon('rotina')}Tarefa fixa</button>
+        <button type="button" class="btn ghost sm" data-action="new-daily" data-date="${U.todayStr()}" data-cat="${workCatId() || ''}" data-cli="${cli.id}">${icon('plus')}Tarefa avulsa</button>
         <button type="button" class="btn ghost sm" data-action="client-history" data-id="${cli.id}">${icon('nota')}Histórico</button>
       </footer>
     </article>`;
   };
 
-  const body = groups
-    .map((cat) => {
-      const cs = S.clients.filter((c) => keyOf(c) === cat.id).sort(U.byNome);
-      if (!cs.length) return '';
-      return `<h2 class="section-title" style="--c:${cat.cor}"><i class="dot"></i>${esc(cat.nome)}</h2>
-        <div class="client-grid">${cs.map((c) => card(c, cat.cor)).join('')}</div>`;
-    })
-    .join('');
+  // Clientes são só do Trabalho: uma lista única, na cor da categoria Trabalho.
+  const cs = [...S.clients].sort(U.byNome);
+  const body = cs.length ? `<div class="client-grid">${cs.map((c) => card(c, workColor())).join('')}</div>` : '';
 
   return `
   <header class="page-head">
-    <div><p class="eyebrow">Cadastros</p><h1>Clientes</h1></div>
+    <div><p class="eyebrow">Trabalho</p><h1>Clientes</h1></div>
     <button type="button" class="btn primary" data-action="new-client">${icon('plus')}<span>Cliente</span></button>
   </header>
   ${body || emptyState('Nenhum cliente ainda', 'Cadastre seus clientes e dê a cada um as próprias tarefas fixas ou avulsas.')}`;
@@ -1115,12 +1063,12 @@ function viewClientes() {
 function viewCategorias() {
   const rows = S.categories
     .map((c, i) => {
-      const nCli = S.clients.filter((x) => x.categoriaId === c.id).length;
+      const nCli = S.clients.length;
       const nRec = S.recurring.filter((x) => x.categoriaId === c.id).length;
       return `<li class="cat-row" style="--c:${c.cor}">
         <span class="swatch"></span>
         <div class="cat-info"><strong>${esc(c.nome)}</strong>
-          <small class="muted">${nRec} tarefa${nRec === 1 ? '' : 's'} fixa${nRec === 1 ? '' : 's'} · ${nCli} cliente${nCli === 1 ? '' : 's'}</small></div>
+          <small class="muted">${nRec} tarefa${nRec === 1 ? '' : 's'} fixa${nRec === 1 ? '' : 's'}${isWork(c.id) ? ` · ${nCli} cliente${nCli === 1 ? '' : 's'}` : ''}</small></div>
         <div class="row-actions">
           <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="-1" aria-label="Mover para cima" ${i === 0 ? 'disabled' : ''}>${icon('up')}</button>
           <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="1" aria-label="Mover para baixo" ${i === S.categories.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
@@ -1167,7 +1115,7 @@ function viewAjustes() {
     </section>
 
     <section class="card">
-      <h2 class="card-title">Quadro de horários</h2>
+      <h2 class="card-title">Agenda do dia (Hoje)</h2>
       <div class="row2">
         <label class="field"><span>Dia começa às</span><select name="agendaInicio">${hourOpts(0, 22, p.agendaInicio)}</select></label>
         <label class="field"><span>Dia termina às</span><select name="agendaFim">${hourOpts(1, 24, p.agendaFim)}</select></label>
@@ -1308,6 +1256,250 @@ async function openClientHistory(cli) {
     ${list ? `<ul class="hist-list">${list}</ul>` : '<p class="muted">Ainda não há tarefas concluídas, tempo ou notas para este cliente.</p>'}
   </div>`);
 }
+
+// ---------------------------------------------------------------------------
+// Relatórios: quanto tempo (do cronômetro) foi para cada categoria, cliente e tarefa
+// ---------------------------------------------------------------------------
+
+const SEM_COR = '#94a3b8';
+const MAX_FATIAS = 6; // acima disso a pizza fica ilegível: o resto vira "Outros"
+const MAX_CORES_CLI = 8;
+
+// Cor de cada cliente: posição fixa na lista (por nome) de todos os clientes, nunca pelo tempo do período.
+const cliColor = (id) => {
+  const i = [...S.clients].sort(U.byNome).findIndex((c) => c.id === id);
+  return i >= 0 && i < MAX_CORES_CLI ? `var(--serie-${i + 1})` : SEM_COR;
+};
+
+function relRange() {
+  const today = U.todayStr();
+  if (S.relPeriodo === 'hoje') return { from: today, to: today, label: 'Hoje' };
+  if (S.relPeriodo === 'mes') {
+    const from = `${S.relMes}-01`;
+    const to = U.addDays(`${U.addMonths(S.relMes, 1)}-01`, -1);
+    return { from, to, label: U.fmtMes(S.relMes) };
+  }
+  return { from: U.addDays(today, -6), to: today, label: 'Últimos 7 dias' };
+}
+
+// Junta o que é pequeno demais em "Outros" e calcula a %.
+function slices(map, total) {
+  const all = [...map.values()].filter((x) => x.sec >= 1).sort((a, b) => b.sec - a.sec);
+  let list = all;
+  if (all.length > MAX_FATIAS) {
+    const rest = all.slice(MAX_FATIAS - 1);
+    list = [
+      ...all.slice(0, MAX_FATIAS - 1),
+      { key: '_outros', label: `Outros (${rest.length})`, cor: SEM_COR, sec: rest.reduce((a, x) => a + x.sec, 0) },
+    ];
+  }
+  return list.map((x) => ({ ...x, pct: total ? (x.sec * 100) / total : 0 }));
+}
+
+const pctTxt = (p) => (p >= 10 || p === 0 ? `${Math.round(p)}%` : `${p.toFixed(1).replace('.', ',')}%`);
+const tipOf = (x) => `${x.label}: ${U.fmtDur(x.sec)} (${pctTxt(x.pct)})`;
+
+// Pizza em anel (SVG), com o total no meio. Passar o mouse numa fatia ou na legenda mostra o valor dela.
+function donutHTML(id, items, total) {
+  const R = 80;
+  const r = 50;
+  const C = 100;
+  const pt = (rad, a) => `${(C + rad * Math.sin(a)).toFixed(2)} ${(C - rad * Math.cos(a)).toFixed(2)}`;
+  let a0 = 0;
+  const paths = items
+    .map((x) => {
+      const attrs = `data-rk="${id}:${x.key}" fill="${x.cor}"`;
+      if (items.length === 1) {
+        return `<path ${attrs} fill-rule="evenodd" d="M ${pt(R, 0)} A ${R} ${R} 0 1 1 ${pt(R, Math.PI)} A ${R} ${R} 0 1 1 ${pt(R, 0)} Z M ${pt(r, 0)} A ${r} ${r} 0 1 0 ${pt(r, Math.PI)} A ${r} ${r} 0 1 0 ${pt(r, 0)} Z"><title>${esc(tipOf(x))}</title></path>`;
+      }
+      const a1 = a0 + (x.sec / total) * Math.PI * 2;
+      const big = a1 - a0 > Math.PI ? 1 : 0;
+      const d = `M ${pt(R, a0)} A ${R} ${R} 0 ${big} 1 ${pt(R, a1)} L ${pt(r, a1)} A ${r} ${r} 0 ${big} 0 ${pt(r, a0)} Z`;
+      a0 = a1;
+      return `<path ${attrs} d="${d}"><title>${esc(tipOf(x))}</title></path>`;
+    })
+    .join('');
+  const legend = items
+    .map(
+      (x) => `<li data-rk="${id}:${x.key}">
+        <span class="sw" style="background:${x.cor}"></span>
+        <span class="name">${esc(x.label)}</span>
+        <span class="val">${U.fmtDur(x.sec)}</span>
+        <span class="pct">${pctTxt(x.pct)}</span>
+      </li>`,
+    )
+    .join('');
+  return `<div class="donut-wrap" data-chart="${id}">
+    <div class="donut">
+      <svg viewBox="0 0 200 200" role="img" aria-label="Gráfico de pizza">${paths}</svg>
+      <div class="donut-center" data-total="${esc(U.fmtDur(total))}"><strong>${U.fmtDur(total)}</strong><span>total</span></div>
+    </div>
+    <ul class="legend">${legend}</ul>
+  </div>`;
+}
+
+function viewRelatorios() {
+  const today = U.todayStr();
+  const { from, to, label } = relRange();
+  const mes = S.relPeriodo === 'mes';
+  const chip = (p, txt) =>
+    `<button type="button" class="tab-chip${S.relPeriodo === p ? ' on' : ''}" data-action="rel-periodo" data-p="${p}">${txt}</button>`;
+  const head = `
+  <header class="page-head">
+    <div class="daynav">
+      ${mes ? `<button type="button" class="icon-btn" data-action="rel-mes" data-n="-1" aria-label="Mês anterior">${icon('left')}</button>` : ''}
+      <div class="daynav-title"><span class="eyebrow">Relatórios</span><h1>${esc(label)}</h1></div>
+      ${mes && S.relMes < today.slice(0, 7) ? `<button type="button" class="icon-btn" data-action="rel-mes" data-n="1" aria-label="Próximo mês">${icon('right')}</button>` : ''}
+    </div>
+  </header>
+  <div class="tab-chips" role="tablist">${chip('hoje', 'Hoje')}${chip('semana', '7 dias')}${chip('mes', 'Mês')}</div>`;
+
+  if (!ensureRange(from, to)) return head + loading();
+
+  const tasks = [];
+  const porDia = [];
+  for (let d = from; d <= to; d = U.addDays(d, 1)) {
+    const v = visible(S.days[d] || []);
+    tasks.push(...v);
+    porDia.push({ d, sec: sumTime(v) });
+  }
+  const timed = tasks.filter((t) => elapsed(t) >= 1);
+  const total = sumTime(timed);
+
+  if (total < 60) {
+    return `${head}${emptyState(
+      'Ainda não há tempo registrado neste período',
+      'Aperte o play nas tarefas da tela Hoje para cronometrar. O tempo de cada tarefa entra aqui, separado por categoria e por cliente.',
+    )}`;
+  }
+
+  // Por categoria
+  const cats = new Map();
+  for (const t of timed) {
+    const c = catById(t.categoriaId);
+    const key = c ? c.id : '_sem';
+    const x = cats.get(key) || { key, label: c ? c.nome : 'Sem categoria', cor: c ? c.cor : SEM_COR, sec: 0 };
+    x.sec += elapsed(t);
+    cats.set(key, x);
+  }
+
+  // Por cliente (só Trabalho)
+  const wid = workCatId();
+  const wnome = esc(catById(wid)?.nome || 'Trabalho');
+  const work = timed.filter((t) => wid && t.categoriaId === wid);
+  const workTotal = sumTime(work);
+  const clis = new Map();
+  for (const t of work) {
+    const c = cliById(t.clienteId);
+    const key = c ? c.id : '_sem';
+    const x = clis.get(key) || { key, label: c ? c.nome : 'Sem cliente', cor: c ? cliColor(c.id) : SEM_COR, sec: 0 };
+    x.sec += elapsed(t);
+    clis.set(key, x);
+  }
+
+  // Por tarefa (mesmo título + mesmo cliente = mesma linha)
+  const byTask = new Map();
+  for (const t of timed) {
+    const key = `${t.titulo.trim().toLowerCase()}|${t.clienteId || ''}`;
+    const x = byTask.get(key) || { titulo: t.titulo.trim(), cli: cliById(t.clienteId)?.nome, cor: colorOf(t), sec: 0, n: 0 };
+    x.sec += elapsed(t);
+    x.n += 1;
+    byTask.set(key, x);
+  }
+  const topTasks = [...byTask.values()].sort((a, b) => b.sec - a.sec).slice(0, 10);
+  const maxTask = topTasks[0]?.sec || 1;
+
+  const dias = porDia.filter((x) => x.d <= today).length || 1;
+  const comTempo = porDia.filter((x) => x.sec >= 60).length;
+  const feitas = timed.filter((t) => t.concluido).length;
+  const tiles = [
+    [U.fmtDur(total), 'tempo registrado'],
+    S.relPeriodo === 'hoje' ? null : [U.fmtDur(total / dias), `média por dia · ${comTempo} de ${dias} dia${dias === 1 ? '' : 's'} com tempo`],
+    [`${feitas} de ${timed.length}`, `tarefa${timed.length === 1 ? '' : 's'} cronometrada${timed.length === 1 ? '' : 's'} concluída${feitas === 1 ? '' : 's'}`],
+    wid ? [pctTxt((workTotal * 100) / total), `do tempo em ${wnome} · ${U.fmtDur(workTotal)}`] : null,
+  ].filter(Boolean);
+
+  // Barras por dia (7 dias ou mês)
+  let barras = '';
+  if (S.relPeriodo !== 'hoje') {
+    const max = Math.max(...porDia.map((x) => x.sec), 1);
+    barras = `<section class="card rel-card">
+      <h2 class="card-title">${icon('calendario')}Tempo por dia</h2>
+      <div class="day-bars${mes ? ' mes' : ''}">
+        ${porDia
+          .map((x) => {
+            const dnum = Number(x.d.slice(8));
+            const lbl = mes ? (dnum === 1 || dnum % 5 === 0 ? dnum : '') : U.DIAS_CURTO[U.weekdayOf(x.d)];
+            const tip = `${U.fmtDiaCurto(x.d)}: ${U.fmtDur(x.sec)}`;
+            return `<button type="button" class="day-bar${x.d === today ? ' today' : ''}" data-action="cal-open" data-date="${x.d}" title="${esc(tip)}" aria-label="${esc(tip)}">
+              <span class="bar-area"><i style="height:${x.sec >= 60 ? Math.max(3, (x.sec * 100) / max) : 0}%"></i></span>
+              <small>${lbl}</small>
+            </button>`;
+          })
+          .join('')}
+      </div>
+      <p class="muted sm">Maior dia: <strong>${U.fmtDur(max)}</strong>. Toque numa barra para abrir o dia.</p>
+    </section>`;
+  }
+
+  const cliCard = !wid
+    ? ''
+    : `<section class="card rel-card">
+      <h2 class="card-title">${icon('clientes')}Por cliente <small class="muted">(${wnome})</small></h2>
+      ${
+        workTotal >= 60
+          ? donutHTML('cli', slices(clis, workTotal), workTotal)
+          : `<p class="muted sm">Nenhum tempo em ${wnome} neste período. Ligue o cronômetro nas tarefas com cliente para ver a divisão aqui.</p>`
+      }
+    </section>`;
+
+  return `${head}
+  <div class="rel-tiles">${tiles.map(([v, l]) => `<div class="card rel-tile"><strong>${v}</strong><span>${l}</span></div>`).join('')}</div>
+  <div class="rel-grid">
+    <section class="card rel-card">
+      <h2 class="card-title">${icon('categorias')}Por categoria</h2>
+      ${donutHTML('cat', slices(cats, total), total)}
+    </section>
+    ${cliCard}
+  </div>
+  ${barras}
+  <section class="card rel-card">
+    <h2 class="card-title">${icon('cronometro')}Tarefas que mais tomaram tempo</h2>
+    <ul class="task-bars">${topTasks
+      .map(
+        (x) => `<li>
+        <div class="tb-head"><span class="name">${esc(x.titulo)}${x.cli ? ` <small class="muted">· ${esc(x.cli)}</small>` : ''}${x.n > 1 ? ` <small class="muted">· ${x.n}x</small>` : ''}</span>
+        <span class="val">${U.fmtDur(x.sec)} <small class="muted">${pctTxt((x.sec * 100) / total)}</small></span></div>
+        <span class="tb-track"><i style="width:${Math.max(1.5, (x.sec * 100) / maxTask)}%;background:${x.cor}"></i></span>
+      </li>`,
+      )
+      .join('')}</ul>
+  </section>`;
+}
+
+// Destaca a fatia (e a linha da legenda) sob o mouse e mostra o valor dela no meio da pizza.
+function relHover(e) {
+  const el = e.target.closest?.('[data-rk]');
+  document.querySelectorAll('.donut-wrap.hl').forEach((w) => {
+    if (el && w.contains(el)) return;
+    w.classList.remove('hl');
+    w.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
+    const c = w.querySelector('.donut-center');
+    c.innerHTML = `<strong>${c.dataset.total}</strong><span>total</span>`;
+  });
+  if (!el) return;
+  const wrap = el.closest('.donut-wrap');
+  const key = el.dataset.rk;
+  wrap.classList.add('hl');
+  wrap.querySelectorAll('[data-rk]').forEach((x) => x.classList.toggle('on', x.dataset.rk === key));
+  const li = wrap.querySelector(`li[data-rk="${CSS.escape(key)}"]`);
+  if (li) {
+    wrap.querySelector('.donut-center').innerHTML = `<strong>${li.querySelector('.val').textContent}</strong><span>${esc(
+      li.querySelector('.name').textContent,
+    )} · ${li.querySelector('.pct').textContent}</span>`;
+  }
+}
+document.addEventListener('pointerover', relHover);
 
 // ---------------------------------------------------------------------------
 // Diário: uma folha por dia para ideias, brainstorming, o que quiser
@@ -1934,10 +2126,10 @@ function notifCard() {
 const VIEWS = {
   painel: viewPainel,
   hoje: viewHoje,
-  horarios: viewHorarios,
   calendario: viewCalendario,
   rotina: viewRotina,
   clientes: viewClientes,
+  relatorios: viewRelatorios,
   categorias: viewCategorias,
   ajustes: viewAjustes,
   acessos: viewAcessos,
@@ -1970,8 +2162,9 @@ function catClientFields(catId, cliId) {
       <select name="categoriaId" data-cat-select required>${S.categories
         .map((c) => `<option value="${c.id}" ${c.id === catId ? 'selected' : ''}>${esc(c.nome)}</option>`)
         .join('')}</select></label>
-    <label class="field" data-client-field ${clientsOf(catId).length ? '' : 'hidden'}><span>Cliente <em>opcional</em></span>
-      <select name="clienteId">${clientOptions(catId, cliId)}</select></label>
+    <label class="field" data-client-field ${isWork(catId) ? '' : 'hidden'}><span>Cliente <em>opcional</em></span>
+      <select name="clienteId">${clientOptions(catId, cliId)}</select>
+      ${S.clients.length ? '' : '<small class="hint">Nenhum cliente ainda. Cadastre em <a href="#/clientes">Clientes</a>.</small>'}</label>
   </div>`;
 }
 
@@ -2008,7 +2201,7 @@ function openDailyForm(t) {
       <label class="field"><span>Horário <em>opcional</em></span><input type="time" name="horario" value="${t.horario || ''}" data-horario></label>
     </div>
     <div data-aviso-group ${t.horario ? '' : 'hidden'}>
-      <label class="field"><span>Duração no quadro de horários</span>${duracaoSelect(t.duracao)}</label>
+      <label class="field"><span>Duração na agenda</span>${duracaoSelect(t.duracao)}</label>
       ${avisoFields(t)}
     </div>
     ${
@@ -2047,7 +2240,7 @@ function openRecForm(r) {
       <label class="field"><span>Duração</span>${duracaoSelect(r.duracao)}</label>
     </div>
     ${avisoFields(r)}
-    <p class="hint">O horário organiza o quadro de horários e os avisos. Você pode concluir a tarefa a qualquer hora do dia.</p>
+    <p class="hint">O horário organiza a agenda do dia e os avisos. Você pode concluir a tarefa a qualquer hora do dia.</p>
     ${modalFoot(editing ? 'delete-rec' : '', r.id)}
   </form>`);
 }
@@ -2057,10 +2250,6 @@ function openClientForm(c) {
   openModal(`<form class="modal-body" data-form="client" data-id="${c.id || ''}">
     ${modalHead(editing ? 'Editar cliente' : 'Novo cliente')}
     <label class="field"><span>Nome</span><input name="nome" required maxlength="80" autocomplete="off" value="${esc(c.nome || '')}" autofocus></label>
-    <label class="field"><span>Categoria</span>
-      <select name="categoriaId" required>${S.categories
-        .map((x) => `<option value="${x.id}" ${x.id === (c.categoriaId || defaultCat(true)) ? 'selected' : ''}>${esc(x.nome)}</option>`)
-        .join('')}</select></label>
     <label class="field"><span>Observações <em>opcional</em></span><textarea name="observacoes" rows="3" maxlength="500">${esc(c.observacoes || '')}</textarea></label>
     ${modalFoot(editing ? 'delete-client' : '', c.id)}
   </form>`);
@@ -2094,7 +2283,7 @@ const FORMS = {
     const patch = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
-      clienteId: f.clienteId || null,
+      clienteId: (isWork(f.categoriaId) && f.clienteId) || null,
       horario: f.horario || null,
       duracao: Number(f.duracao) || null,
       ...avisoData(f),
@@ -2135,7 +2324,7 @@ const FORMS = {
     const data = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
-      clienteId: f.clienteId || null,
+      clienteId: (isWork(f.categoriaId) && f.clienteId) || null,
       horario: f.horario || null,
       duracao: Number(f.duracao) || null,
       ...avisoData(f),
@@ -2170,7 +2359,7 @@ const FORMS = {
 
   client(form) {
     const f = formData(form);
-    const data = { nome: f.nome.trim(), categoriaId: f.categoriaId, observacoes: f.observacoes.trim() };
+    const data = { nome: f.nome.trim(), categoriaId: workCatId(), observacoes: f.observacoes.trim() };
     if (!data.nome) return;
     const id = form.dataset.id;
     if (id) {
@@ -2305,14 +2494,6 @@ const ACTIONS = {
       toast(errMsg(err)),
     ),
 
-  'filtro-status': ({ status }) => {
-    S.filtro.status = status;
-    render();
-  },
-  'filtro-limpar': () => {
-    S.filtro = { status: 'todas', cat: '', cli: '' };
-    render();
-  },
   more: () => $('#more').classList.toggle('open'),
 
   go: ({ route, date }) => {
@@ -2335,6 +2516,7 @@ const ACTIONS = {
     const ops = [];
     if (!t.concluido && isRunning(t)) stopTimer(t, ops); // concluiu: o cronômetro para
     t.concluido = !t.concluido;
+    if (S.pedirConclusao === id) S.pedirConclusao = null;
     ops.push({ type: 'update', col: 'dailyTasks', id, data: { concluido: t.concluido } });
     render();
     refreshDetail(id, date);
@@ -2379,7 +2561,9 @@ const ACTIONS = {
     const ops = [];
     if (isRunning(t)) {
       stopTimer(t, ops);
+      S.pedirConclusao = id; // aparece o ✓ "Finalizou?" ao lado do cronômetro
     } else {
+      if (S.pedirConclusao === id) S.pedirConclusao = null;
       // Uma coisa de cada vez: pausa o que estiver rodando.
       for (const list of Object.values(S.days)) for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops);
       t.cronometroInicio = Date.now();
@@ -2438,6 +2622,16 @@ const ACTIONS = {
     S.calSel = date;
     S.calMonth = date.slice(0, 7);
     location.hash = '#/calendario';
+  },
+
+  'rel-periodo': ({ p }) => {
+    S.relPeriodo = p;
+    if (p === 'mes') S.relMes = U.todayStr().slice(0, 7);
+    render();
+  },
+  'rel-mes': ({ n }) => {
+    S.relMes = U.addMonths(S.relMes, Number(n));
+    render();
   },
 
   'rotina-dia': ({ d }) => {
@@ -2584,16 +2778,12 @@ document.addEventListener('change', (e) => {
     file.text().then(startImport, (err) => toast(errMsg(err)));
   } else if (t.matches('[data-cat-select]')) {
     const field = t.form.querySelector('[data-client-field]');
-    field.hidden = !clientsOf(t.value).length;
+    field.hidden = !isWork(t.value);
     field.querySelector('select').innerHTML = clientOptions(t.value, '');
   } else if (t.name === 'corLivre') {
     const radio = t.form.querySelector('input[name="cor"][value="custom"]');
     radio.checked = true;
     radio.closest('.sw').style.setProperty('--c', t.value);
-  } else if (t.matches('[data-filter]')) {
-    S.filtro[t.dataset.filter] = t.value;
-    if (t.dataset.filter === 'cat') S.filtro.cli = '';
-    render();
   } else if (t.closest('[data-settings]')) {
     saveSetting(t);
   }
@@ -2651,7 +2841,7 @@ setInterval(() => {
     S.lastToday = t;
   }
   const typing = document.activeElement?.closest?.('#view') && document.activeElement.matches('input, select, textarea');
-  if (S.user && S.ready && !modal.open && !document.hidden && !typing && ['painel', 'hoje', 'horarios'].includes(currentRoute())) {
+  if (S.user && S.ready && !modal.open && !document.hidden && !typing && ['painel', 'hoje', 'relatorios'].includes(currentRoute())) {
     render();
   }
 }, 60_000);
