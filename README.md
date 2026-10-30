@@ -1,6 +1,6 @@
 # Rotina — app web de rotina pessoal
 
-To-do list diária agrupada por categorias (Religião, Relacionamento, Trabalho, Saúde…), com clientes dentro do trabalho, rotina semanal fixa, calendário para editar dias específicos e um quadro de horários só para consulta.
+Agenda diária com horários, cronômetro e notas em cada tarefa, por categorias (Religião, Relacionamento, Trabalho, Saúde…), com clientes no trabalho, rotina semanal fixa e calendário para editar dias específicos.
 
 - **Site estático**: só HTML, CSS e JavaScript. Não precisa instalar nada nem "compilar".
 - **Login com Google** (Firebase Auth): cada pessoa tem seus próprios dados e configurações.
@@ -94,12 +94,12 @@ Para ligar o envio com o app fechado (uma vez só):
 | Tela | O que faz |
 | --- | --- |
 | **Painel** | Progresso do dia, o que está planejado para agora e o próximo, pendências, progresso por categoria e cliente, últimos 7 dias. É a tela inicial no computador. |
-| **Hoje** | To-do list do dia agrupada por categoria e, dentro dela, por cliente. Filtros por status (pendentes, atrasadas, concluídas), categoria e cliente. Só aqui (e no Painel/Calendário) se marca como concluído. Navegue entre os dias com ‹ ›. |
-| **Horários** | Linha do tempo do dia, com os blocos de horário e uma linha vermelha no "agora". É só visual: concluir é na lista. |
-| **Calendário** | Mês inteiro com o progresso de cada dia. Abra um dia para adicionar tarefas avulsas ou remover tarefas da rotina **só daquele dia** (dá para restaurar). |
+| **Hoje** | A agenda do dia com os horários e uma linha vermelha no "agora". Cada tarefa tem o ✓ de concluir, o cronômetro (▶ / ⏸) e o botão de notas. Ao pausar, aparece ao lado o ✓ **Finalizou?** para confirmar que terminou. As horas com tarefa ficam maiores e as vazias ficam compactas. Tarefas sem horário ficam na coluna "Sem horário". Navegue entre os dias com ‹ ›. |
+| **Calendário** | Mês inteiro com o progresso de cada dia. Ao clicar num dia, aparece a lista das tarefas dele com os horários. Dá para adicionar tarefas avulsas ou remover tarefas da rotina **só daquele dia** (dá para restaurar). |
 | **Diário** | Uma folha por dia para ideias, brainstorming e anotações livres, com busca. |
 | **Rotina** | Tarefas fixas que se repetem por dia da semana (seg a dom), sempre com horário. Elas aparecem sozinhas na lista de cada dia. |
-| **Clientes** | Clientes ligados a uma categoria (normalmente Trabalho), cada um com as próprias tarefas fixas e avulsas. |
+| **Clientes** | Clientes do Trabalho, cada um com as próprias tarefas fixas e avulsas e o histórico. Ao criar uma tarefa (fixa ou do dia) na categoria Trabalho, aparece o campo **Cliente** (opcional) para ligar a tarefa a ele. |
+| **Relatórios** | Quanto tempo do cronômetro foi para cada coisa: pizza por categoria, pizza por cliente (só Trabalho), barras de tempo por dia e as tarefas que mais tomaram tempo. Escolha Hoje, 7 dias ou Mês (com ‹ › para ver meses anteriores). Passe o mouse numa fatia para ver o tempo e a % dela. Tocar numa barra abre o dia no calendário. |
 | **Categorias** | Nome, cor e ordem das categorias. |
 | **Ajustes** | Como quer ser chamado, notificações, tema claro/escuro, horário de início/fim do quadro, duração padrão e sair. |
 | **Acessos** | Só para administradores: liberar ou remover e-mails que podem entrar no app. |
@@ -108,7 +108,7 @@ Para ligar o envio com o app fechado (uma vez só):
 
 - Tarefas são concluídas **por dia**, não por horário. O horário serve só para saber o que fazer naquele momento.
 - Se o horário passar, a tarefa continua pendente, marcada como **Atrasada**, até você concluir.
-- **Cronômetro (opcional)**: o botão ▶ em cada tarefa marca quanto tempo você leva nela. Pode pausar e continuar quantas vezes quiser. Iniciar outra tarefa pausa a anterior, e concluir a tarefa para o cronômetro. O total aparece em cada categoria/cliente e no Painel. Esqueceu de pausar? Edite a tarefa e corrija o "Tempo gasto".
+- **Cronômetro (opcional)**: o botão ▶ em cada tarefa marca quanto tempo você leva nela. Pode pausar e continuar quantas vezes quiser. Iniciar outra tarefa pausa a anterior, e concluir a tarefa para o cronômetro. Ao pausar, o ✓ **Finalizou?** aparece ao lado para concluir com um toque. O total aparece em cada categoria/cliente, no Painel e na tela **Relatórios**. Esqueceu de pausar? Edite a tarefa e corrija o "Tempo gasto".
 - **Notas da tarefa**: toque no nome de uma tarefa para abrir o painel dela, com o cronômetro, um bloco de notas que salva sozinho (o que foi feito, onde errou, o que melhorar; o botão "Usar modelo" preenche essas perguntas) e os botões Concluir e Editar.
 - **Histórico do cliente**: em Clientes, o botão "Histórico" mostra, dia por dia, as tarefas feitas, o tempo gasto e as notas daquele cliente.
 - **Diário**: uma folha por dia para ideias e brainstorming. Salva sozinho e tem busca.
