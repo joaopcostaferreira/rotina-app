@@ -56,6 +56,10 @@ export const toMin = (hhmm) => {
 
 export const fromMin = (min) => `${pad(Math.floor(min / 60) % 24)}:${pad(min % 60)}`;
 
+// Hora de Brasília ("14:32"), mesmo com o aparelho em outro fuso.
+const fmtHoraBR = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+export const horaBR = () => fmtHoraBR.format(new Date());
+
 export const nowMin = () => {
   const d = new Date();
   return d.getHours() * 60 + d.getMinutes();

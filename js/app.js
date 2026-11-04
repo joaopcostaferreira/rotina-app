@@ -29,6 +29,10 @@ const DEFAULT_PROFILE = {
   avisoAntes: 10, // minutos (padrão para tarefas novas)
   notifPendentes: false, // lembrete de pendências no fim do dia
   notifPendentesHora: '21:00',
+  // Relatório "Seu dia": o sono não conta; antes da 1ª tarefa (até "comecoAte") é o tempo de acordar.
+  acordar: '07:00',
+  comecoAte: '08:00',
+  dormir: '23:30',
 };
 const PALETA = ['#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#64748b'];
 const DURACOES = [15, 30, 45, 60, 90, 120, 180, 240];
@@ -104,8 +108,19 @@ const workCatId = () =>
 const isWork = (catId) => !!catId && catId === workCatId();
 const workColor = () => catById(workCatId())?.cor || '#0ea5e9';
 const clientsOf = (catId) => (isWork(catId) ? [...S.clients].sort(U.byNome) : []);
+// Cliente ativo ou finalizado. "Só financeiro" (ex.: sociedade) não aparece no ▶, porque não gasta horas.
+// "Pede o nome" (ex.: Fotografia): ao iniciar, pergunta o nome da pessoa atendida.
+const isAtivo = (c) => (c?.status || 'ativo') !== 'finalizado';
+const startClients = () => S.clients.filter((c) => isAtivo(c) && !c.soFinanceiro).sort(U.byNome);
+const servicosOf = (c) => (c?.servicos || []).filter(Boolean);
+// Categorias com lista própria (ex.: Cursos → Inglês, Fotografia) e tarefas opcionais ao iniciar (ex.: Estudar, Praticar).
+const allItens = (cat) => (cat && !isWork(cat.id) ? (cat.itens || []).filter((i) => i?.nome) : []);
+const itensOf = (cat) => allItens(cat).filter((i) => !i.oculto);
+const listCats = () => S.categories.filter((c) => itensOf(c).length);
+const itemOf = (t) => (t?.itemId ? allItens(catById(t.categoriaId)).find((i) => i.id === t.itemId) : null);
+const subsOf = (cat) => (cat?.subtarefas || []).filter(Boolean);
 const visible = (tasks) => (tasks || []).filter((t) => !t.removido);
-const duracao = (t) => t.duracao || S.profile.duracaoPadrao || 30;
+const duracao = (t) => t.duracao || (t.fimAberto ? 90 : S.profile.duracaoPadrao || 30); // sem hora de fim: só para desenhar a agenda
 const firstName = () => S.profile.apelido || (S.user?.nome || '').split(' ')[0] || 'você';
 const sortCats = () =>
   S.categories.sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || U.byNome(a, b));
@@ -220,8 +235,14 @@ function applyTheme() {
 // Lógica da rotina: geração das tarefas do dia
 // ---------------------------------------------------------------------------
 
-const recurringApplies = (r, date) =>
-  r.ativo !== false && (r.diasDaSemana || []).includes(U.weekdayOf(date)) && (!r.inicio || date >= r.inicio);
+// Repete toda semana (dias da semana) ou todo mês (um dia do mês; em mês curto, cai no último dia).
+const lastDayOf = (date) => Number(U.addDays(`${U.addMonths(date.slice(0, 7), 1)}-01`, -1).slice(8));
+function repeatsOn(r, date) {
+  if (r.repete === 'mes') return Number(date.slice(8)) === Math.min(r.diaDoMes || 1, lastDayOf(date));
+  return (r.diasDaSemana || []).includes(U.weekdayOf(date));
+}
+const recurringApplies = (r, date) => r.ativo !== false && repeatsOn(r, date) && (!r.inicio || date >= r.inicio);
+const isMensal = (r) => r.repete === 'mes';
 
 // O id é fixo (rotina + data): gerar duas vezes nunca duplica a tarefa.
 const instanceFrom = (r, date) => ({
@@ -229,9 +250,11 @@ const instanceFrom = (r, date) => ({
   titulo: r.titulo,
   categoriaId: r.categoriaId,
   clienteId: r.clienteId || null,
+  itemId: r.itemId || null,
   data: date,
   horario: r.horario || null,
   duracao: r.duracao || null,
+  fimAberto: !!r.fimAberto,
   aviso: r.aviso ?? null,
   avisoAntes: r.avisoAntes ?? null,
   concluido: false,
@@ -464,7 +487,7 @@ function render() {
 
   const view = $('#view');
   view.innerHTML = VIEWS[r]();
-  document.title = `${navLabel(r)} · Rotina`;
+  document.title = `${navLabel(r)} · Segundo Cérebro`;
 
   if (r !== lastRoute) {
     window.scrollTo(0, 0);
@@ -494,7 +517,7 @@ function shellHTML() {
   return `
   <div class="app">
     <aside class="sidebar">
-      <a class="brand" href="#/painel">${LOGO}<span>Rotina</span></a>
+      <a class="brand" href="#/painel">${LOGO}<span>Segundo Cérebro</span></a>
       <nav class="nav" aria-label="Principal">${navItems().map(link).join('')}</nav>
       <div class="side-user">${avatar}<div><strong>${esc(u.nome || 'Você')}</strong><small>${esc(u.email)}</small></div></div>
     </aside>
@@ -519,7 +542,7 @@ function loginHTML() {
   <div class="login">
     <div class="login-card">
       ${LOGO}
-      <h1>Rotina</h1>
+      <h1>Segundo Cérebro</h1>
       <p class="lead">Sua to-do list diária por categorias, com clientes, rotina semanal e a agenda do dia com horários.</p>
       <button type="button" class="btn google" data-action="login">${isDemo ? icon('sparkle') : GOOGLE}<span>${isDemo ? 'Entrar no modo demonstração' : 'Entrar com Google'}</span></button>
       ${
@@ -554,7 +577,7 @@ function dayNav(date) {
   return `<div class="daynav">
     <button type="button" class="icon-btn" data-action="day-shift" data-n="-1" aria-label="Dia anterior">${icon('left')}</button>
     <div class="daynav-title">
-      <span class="eyebrow">${esc(U.relativo(date))}</span>
+      <span class="eyebrow">${esc(U.relativo(date))}${isToday ? ` · ${clockHTML()}` : ''}</span>
       <h1>${esc(U.fmtDiaLongo(date))}</h1>
     </div>
     <button type="button" class="icon-btn" data-action="day-shift" data-n="1" aria-label="Próximo dia">${icon('right')}</button>
@@ -578,12 +601,42 @@ const isRunning = (t) => !!t.cronometroInicio;
 const elapsed = (t) => (t.tempoGasto || 0) + (isRunning(t) ? Math.max(0, (Date.now() - t.cronometroInicio) / 1000) : 0);
 const sumTime = (list) => list.reduce((a, t) => a + elapsed(t), 0);
 
-// Pausa: soma o tempo corrido ao acumulado.
+// Cada play → pausa vira uma sessão { i: início, f: fim, obs: o que fez } em t.sessoes (horários em ms).
+// Pausa: soma o tempo corrido ao acumulado e fecha a sessão aberta.
 function stopTimer(t, ops) {
   t.tempoGasto = Math.round(elapsed(t));
   t.cronometroInicio = null;
-  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { tempoGasto: t.tempoGasto, cronometroInicio: null } });
+  const last = t.sessoes?.[t.sessoes.length - 1];
+  if (last && !last.f) last.f = Date.now();
+  const data = { tempoGasto: t.tempoGasto, cronometroInicio: null };
+  if (t.sessoes) data.sessoes = t.sessoes;
+  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data });
 }
+
+// Play: uma coisa de cada vez, então pausa o que estiver rodando e abre uma sessão nova.
+function startTimer(t, ops) {
+  for (const list of Object.values(S.days)) for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops);
+  const now = Date.now();
+  t.cronometroInicio = now;
+  t.sessoes = [...(t.sessoes || []), { i: now }];
+  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { cronometroInicio: now, sessoes: t.sessoes } });
+}
+
+const hhmm = (ms) => {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+// Momento (ms) de um horário num dia: "2026-11-04" + 570 min → 04/11 09:30.
+const tsOf = (date, min) => U.parseYmd(date).getTime() + min * 60_000;
+// Primeiro horário (min do dia) em que algo foi feito: começo da 1ª sessão; sem sessões, o horário da tarefa.
+function startMinOf(t) {
+  const s = (t.sessoes || []).find((x) => x.i);
+  if (s) return Math.round((s.i - U.parseYmd(t.data).getTime()) / 60_000);
+  return elapsed(t) >= 60 && t.horario ? U.toMin(t.horario) : null;
+}
+
+// Subtítulo de uma tarefa: categoria · cliente/curso · pessoa.
+const taskSub = (t) => [catById(t.categoriaId)?.nome, cliById(t.clienteId)?.nome, itemOf(t)?.nome].filter(Boolean).join(' · ');
 
 // Texto que se atualiza a cada segundo enquanto o cronômetro roda.
 const liveAttrs = (t) => `data-live data-base="${t.tempoGasto || 0}" data-start="${t.cronometroInicio}"`;
@@ -614,7 +667,8 @@ function taskRow(t, { showCat = false } = {}) {
       : '',
     showCat && cat ? `<span class="chip cat"><i class="dot"></i>${esc(cat.nome)}</span>` : '',
     showCat && cli ? `<span class="chip">${icon('clientes')}${esc(cli.nome)}</span>` : '',
-    t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina semanal">${icon('rotina')}Rotina</span>` : '',
+    showCat && itemOf(t) ? `<span class="chip">${icon('diario')}${esc(itemOf(t).nome)}</span>` : '',
+    t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina">${icon('rotina')}Rotina</span>` : '',
     t.notas?.trim() ? `<span class="chip muted" title="Tem notas">${icon('nota')}Notas</span>` : '',
   ].join('');
   return `<li class="task${t.concluido ? ' done' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}" style="--c:${colorOf(t)}">
@@ -695,20 +749,48 @@ function viewPainel() {
     })
     .join('');
 
-  const cliRows = [...S.clients]
-    .sort(U.byNome)
-    .map((cli) => {
-      const cp = progress(v.filter((t) => t.clienteId === cli.id));
-      const cor = workColor();
-      return `<li style="--c:${cor}"><i class="dot"></i><span class="name">${esc(cli.nome)}</span>
-        ${cp.total ? `<span class="bar"><i style="width:${cp.pct}%"></i></span><span class="count">${cp.done}/${cp.total}</span>` : '<span class="muted sm">sem tarefas hoje</span>'}</li>`;
-    })
+  // Clientes e listas (ex.: Cursos): ▶ ao lado de cada um para começar na hora.
+  const startRow = ({ nome, cor, pred, attrs }) => {
+    const run = v.find((t) => isRunning(t) && pred(t));
+    const sec = sumTime(v.filter(pred));
+    return `<li style="--c:${cor}"><i class="dot"></i><span class="name">${esc(nome)}</span>
+      ${
+        run
+          ? `<span class="st-time on" ${liveAttrs(run)}>${U.fmtRelogio(elapsed(run))}</span>
+             <button type="button" class="play-btn running" data-action="timer" data-id="${run.id}" data-date="${run.data}" aria-label="Pausar ${esc(nome)}" title="Pausar">${icon('pause')}</button>`
+          : `<span class="st-time">${sec >= 60 ? U.fmtDur(sec) : ''}</span>
+             <button type="button" class="play-btn" data-action="start-pick" ${attrs} aria-label="Iniciar ${esc(nome)}" title="Iniciar">${icon('play')}</button>`
+      }</li>`;
+  };
+  const clis = startClients();
+  const cliCard = `<section class="card start-card cli-card">
+    <h2 class="card-title">${icon('clientes')}Clientes<span class="grow"></span>
+      <button type="button" class="icon-btn sm" data-action="new-client" aria-label="Novo cliente" title="Novo cliente">${icon('plus')}</button></h2>
+    ${
+      clis.length
+        ? `<ul class="starts">${clis.map((c) => startRow({ nome: c.nome, cor: workColor(), pred: (t) => t.clienteId === c.id, attrs: `data-cli="${c.id}"` })).join('')}</ul>`
+        : '<p class="muted">Nenhum cliente ativo. <a href="#/clientes">Ver clientes</a></p>'
+    }
+  </section>`;
+  const listCards = listCats()
+    .map(
+      (cat) => `<section class="card start-card">
+      <h2 class="card-title">${icon('diario')}${esc(cat.nome)}<span class="grow"></span>
+        <button type="button" class="icon-btn sm" data-action="edit-cat" data-id="${cat.id}" aria-label="Editar a lista de ${esc(cat.nome)}" title="Adicionar ou mudar a lista">${icon('plus')}</button></h2>
+      <ul class="starts">${itensOf(cat)
+        .map((it) => startRow({ nome: it.nome, cor: cat.cor, pred: (t) => t.categoriaId === cat.id && t.itemId === it.id, attrs: `data-cat="${cat.id}" data-item="${it.id}"` }))
+        .join('')}</ul>
+    </section>`,
+    )
     .join('');
 
   return `
   <header class="page-head">
-    <div><p class="eyebrow">${esc(U.fmtDiaLongo(today))}</p><h1>${saud}, ${esc(firstName())}</h1></div>
-    <button type="button" class="btn primary" data-action="new-daily" data-date="${today}">${icon('plus')}<span>Tarefa</span></button>
+    <div><p class="eyebrow">${esc(U.fmtDiaLongo(today))} · ${clockHTML()}</p><h1>${saud}, ${esc(firstName())}</h1></div>
+    <div class="head-btns">
+      <button type="button" class="btn soft" data-action="new-daily" data-date="${today}">${icon('plus')}<span>Tarefa</span></button>
+      <button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>
+    </div>
   </header>
   <div class="dash">
     <section class="card hero">
@@ -727,7 +809,7 @@ function viewPainel() {
         .map(
           (t) => `<div class="running-now" style="--c:${colorOf(t)}">
             <span class="running-icon">${icon('cronometro')}</span>
-            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">Cronômetro: <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
+            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}<strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
             <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro">${icon('pause')}</button>
           </div>`,
         )
@@ -749,6 +831,8 @@ function viewPainel() {
         .join('')}</div>
       <p class="muted sm">${media === null ? '&nbsp;' : `Média de ${media}% das tarefas concluídas`}</p>
     </section>
+    ${cliCard}
+    <div class="dash-lists">${listCards}</div>
     <section class="card pend">
       <h2 class="card-title">${icon('hoje')}Pendentes hoje <span class="count">${pend.length}</span></h2>
       ${pend.length ? `<ul class="tasks">${pend.slice(0, 8).map((t) => taskRow(t, { showCat: true })).join('')}</ul>` : '<p class="muted">Nenhuma pendência. 👏</p>'}
@@ -759,13 +843,12 @@ function viewPainel() {
         <h2 class="card-title">${icon('categorias')}Categorias</h2>
         ${catRows ? `<ul class="meters">${catRows}</ul>` : '<p class="muted">Sem tarefas hoje.</p>'}
       </section>
-      <section class="card">
-        <h2 class="card-title">${icon('clientes')}Clientes</h2>
-        ${cliRows ? `<ul class="meters">${cliRows}</ul>` : '<p class="muted">Nenhum cliente. <a href="#/clientes">Cadastrar</a></p>'}
-      </section>
     </div>
   </div>`;
 }
+
+// Relógio no horário de Brasília (atualizado a cada segundo pelo mesmo intervalo dos cronômetros).
+const clockHTML = () => `<span class="clock" data-clock>${U.horaBR()}</span>`;
 
 // Hoje: a agenda do dia com os horários. Em cada bloco: ✓ concluir, cronômetro (play/pausa) e notas.
 // As horas com tarefa ficam altas (cabem os botões) e as horas vazias ficam baixinhas.
@@ -785,7 +868,10 @@ function blockTools(t, { compact = false } = {}) {
 function viewHoje() {
   const tasks = dayTasks(S.date);
   const head = `<header class="page-head">${dayNav(S.date)}
-    <button type="button" class="btn primary" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button></header>`;
+    <div class="head-btns">
+      <button type="button" class="btn ${S.date === U.todayStr() ? 'soft' : 'primary'}" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button>
+      ${S.date === U.todayStr() ? `<button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>` : ''}
+    </div></header>`;
   if (!tasks) return head + loading();
   const v = visible(tasks);
   if (!v.length) {
@@ -847,13 +933,13 @@ function viewHoje() {
       const altura = y(e) - y(s);
       const short = altura < 60;
       const late = isLate(t);
-      const sub = [cli?.nome, late ? 'Atrasada' : ''].filter(Boolean).join(' · ');
+      const sub = [cli?.nome, itemOf(t)?.nome, late ? 'Atrasada' : ''].filter(Boolean).join(' · ');
       return `<div class="block${t.concluido ? ' done' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
         style="--c:${colorOf(t)};top:${y(s)}px;height:${altura}px;left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})">
         <button type="button" class="check b-check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
           data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
         <div class="b-text" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir cronômetro e notas">
-          <span class="block-time">${t.horario}–${U.fromMin(e)}</span>
+          <span class="block-time">${t.fimAberto ? `${t.horario} · sem hora de fim` : `${t.horario}–${U.fromMin(e)}`}</span>
           <span class="block-title">${esc(t.titulo)}</span>
           ${sub ? `<span class="block-sub">${esc(sub)}</span>` : ''}
         </div>
@@ -971,18 +1057,22 @@ function recRow(r) {
     <button type="button" class="rec-main" data-action="edit-rec" data-id="${r.id}">
       <span class="task-title">${esc(r.titulo)}</span>
       <span class="task-meta">
-        ${r.horario ? `<span class="chip">${icon('horarios')}${r.horario}${r.duracao ? ` · ${r.duracao} min` : ''}</span>` : '<span class="chip muted">Sem horário</span>'}
+        ${r.horario ? `<span class="chip">${icon('horarios')}${r.horario}${r.fimAberto ? ' · sem fim' : r.duracao ? ` · ${r.duracao} min` : ''}</span>` : '<span class="chip muted">Sem horário</span>'}
         ${cli ? `<span class="chip">${icon('clientes')}${esc(cli.nome)}</span>` : ''}
+        ${itemOf(r) ? `<span class="chip">${icon('diario')}${esc(itemOf(r).nome)}</span>` : ''}
       </span>
     </button>
-    ${dayDots(r.diasDaSemana || [])}
+    ${isMensal(r) ? `<span class="chip month-chip">${icon('calendario')}Todo dia ${r.diaDoMes}</span>` : dayDots(r.diasDaSemana || [])}
   </li>`;
 }
 
 function viewRotina() {
   const sel = S.rotinaDia;
-  const count = (d) => S.recurring.filter((r) => (r.diasDaSemana || []).includes(d)).length;
-  const list = S.recurring.filter((r) => sel === 'all' || (r.diasDaSemana || []).includes(sel)).sort(U.byHorarioTitulo);
+  const semanais = S.recurring.filter((r) => !isMensal(r));
+  const mensais = S.recurring.filter(isMensal);
+  const count = (d) => semanais.filter((r) => (r.diasDaSemana || []).includes(d)).length;
+  const list = (sel === 'all' ? S.recurring : sel === 'mes' ? mensais : semanais.filter((r) => (r.diasDaSemana || []).includes(sel)))
+    .sort((a, b) => (isMensal(a) && isMensal(b) ? a.diaDoMes - b.diaDoMes : 0) || U.byHorarioTitulo(a, b));
   const groups = [...S.categories, { id: '_sem', nome: 'Sem categoria', cor: '#94a3b8' }];
   const keyOf = (r) => (catById(r.categoriaId) ? r.categoriaId : '_sem');
   const chip = (d, label, n) =>
@@ -990,13 +1080,14 @@ function viewRotina() {
 
   return `
   <header class="page-head">
-    <div><p class="eyebrow">Rotina semanal fixa</p><h1>Rotina</h1></div>
+    <div><p class="eyebrow">Tarefas fixas</p><h1>Rotina</h1></div>
     <button type="button" class="btn primary" data-action="new-rec">${icon('plus')}<span>Tarefa fixa</span></button>
   </header>
-  <p class="muted intro">Estas tarefas se repetem toda semana e aparecem sozinhas na lista de cada dia. Para mudar só um dia específico, use o <a href="#/calendario">calendário</a>.</p>
+  <p class="muted intro">Estas tarefas se repetem toda semana (ou todo mês) e aparecem sozinhas na lista de cada dia. Para mudar só um dia específico, use o <a href="#/calendario">calendário</a>.</p>
   <div class="tab-chips" role="tablist">
     ${chip('all', 'Todas', S.recurring.length)}
     ${U.ORDEM_SEMANA.map((d) => chip(d, U.DIAS_CURTO[d], count(d))).join('')}
+    ${chip('mes', 'Mensal', mensais.length)}
   </div>
   ${
     list.length
@@ -1010,7 +1101,7 @@ function viewRotina() {
           })
           .join('')}</div>`
       : emptyState(
-          sel === 'all' ? 'Sua rotina está vazia' : `Nada fixo na ${U.DIAS_CURTO[sel].toLowerCase()}`,
+          sel === 'all' ? 'Sua rotina está vazia' : sel === 'mes' ? 'Nenhuma tarefa mensal' : `Nada fixo na ${U.DIAS_CURTO[sel].toLowerCase()}`,
           'Crie tarefas que se repetem, como “Oração da manhã” todos os dias ou “Relatório” às sextas.',
         )
   }`;
@@ -1019,45 +1110,63 @@ function viewRotina() {
 function viewClientes() {
   const todayTasks = visible(dayTasks(U.todayStr()) || []);
 
-  const card = (cli, cor) => {
+  const card = (cli) => {
     const recs = S.recurring.filter((r) => r.clienteId === cli.id).sort(U.byHorarioTitulo);
     const tt = todayTasks.filter((t) => t.clienteId === cli.id);
-    const pend = tt.filter((t) => !t.concluido).length;
-    return `<article class="card client-card" style="--c:${cor}">
+    const sec = sumTime(tt);
+    const servs = servicosOf(cli);
+    const podeIniciar = isAtivo(cli) && !cli.soFinanceiro;
+    const status = !isAtivo(cli) ? 'Finalizado' : cli.soFinanceiro ? 'Só financeiro' : tt.length ? `${tt.filter((t) => !t.concluido).length} pendente(s) hoje` : 'Nada hoje';
+    return `<article class="card client-card${isAtivo(cli) ? '' : ' off'}" style="--c:${workColor()}">
       <header>
         <div><h3>${esc(cli.nome)}</h3>
-        <p class="muted sm">${tt.length ? `${pend} pendente${pend === 1 ? '' : 's'} hoje` : 'Nenhuma tarefa hoje'}</p></div>
+        <p class="muted sm">${esc(status)}${sec >= 60 ? ` · ${U.fmtDur(sec)} hoje` : ''}</p></div>
         <button type="button" class="icon-btn sm" data-action="edit-client" data-id="${cli.id}" aria-label="Editar cliente">${icon('edit')}</button>
       </header>
       ${cli.observacoes ? `<p class="obs">${esc(cli.observacoes)}</p>` : ''}
+      ${
+        cli.soFinanceiro
+          ? ''
+          : `<div class="serv-chips">${
+              servs.length ? servs.map((s) => `<span class="chip">${esc(s)}</span>`).join('') : '<span class="muted sm">Sem serviços cadastrados.</span>'
+            }${cli.pedeNome ? '<span class="chip muted">Pede o nome da pessoa</span>' : ''}</div>`
+      }
       ${
         recs.length
           ? `<ul class="mini">${recs
               .map(
                 (r) => `<li><button type="button" data-action="edit-rec" data-id="${r.id}">
-                <span>${esc(r.titulo)}${r.horario ? ` <small>${r.horario}</small>` : ''}</span>${dayDots(r.diasDaSemana || [], 'sm')}</button></li>`,
+                <span>${esc(r.titulo)}${r.horario ? ` <small>${r.horario}</small>` : ''}</span>${isMensal(r) ? `<small class="muted">todo dia ${r.diaDoMes}</small>` : dayDots(r.diasDaSemana || [], 'sm')}</button></li>`,
               )
               .join('')}</ul>`
-          : '<p class="muted sm">Sem tarefas fixas.</p>'
+          : ''
       }
       <footer>
-        <button type="button" class="btn soft sm" data-action="new-rec" data-cat="${workCatId() || ''}" data-cli="${cli.id}">${icon('rotina')}Tarefa fixa</button>
-        <button type="button" class="btn ghost sm" data-action="new-daily" data-date="${U.todayStr()}" data-cat="${workCatId() || ''}" data-cli="${cli.id}">${icon('plus')}Tarefa avulsa</button>
+        ${podeIniciar ? `<button type="button" class="btn primary sm" data-action="start-pick" data-cli="${cli.id}">${icon('play')}Iniciar</button>` : ''}
+        ${podeIniciar ? `<button type="button" class="btn ghost sm" data-action="new-daily" data-date="${U.todayStr()}" data-cat="${workCatId() || ''}" data-cli="${cli.id}">${icon('plus')}Tarefa</button>` : ''}
         <button type="button" class="btn ghost sm" data-action="client-history" data-id="${cli.id}">${icon('nota')}Histórico</button>
       </footer>
     </article>`;
   };
 
-  // Clientes são só do Trabalho: uma lista única, na cor da categoria Trabalho.
   const cs = [...S.clients].sort(U.byNome);
-  const body = cs.length ? `<div class="client-grid">${cs.map((c) => card(c, workColor())).join('')}</div>` : '';
+  const ativos = cs.filter((c) => isAtivo(c) && !c.soFinanceiro);
+  const fin = cs.filter((c) => isAtivo(c) && c.soFinanceiro);
+  const off = cs.filter((c) => !isAtivo(c));
+  const grid = (arr) => `<div class="client-grid">${arr.map(card).join('')}</div>`;
 
   return `
   <header class="page-head">
     <div><p class="eyebrow">Trabalho</p><h1>Clientes</h1></div>
     <button type="button" class="btn primary" data-action="new-client">${icon('plus')}<span>Cliente</span></button>
   </header>
-  ${body || emptyState('Nenhum cliente ainda', 'Cadastre seus clientes e dê a cada um as próprias tarefas fixas ou avulsas.')}`;
+  ${
+    cs.length
+      ? `${ativos.length ? grid(ativos) : '<p class="muted">Nenhum cliente ativo.</p>'}
+        ${fin.length ? `<h2 class="section-title">Só financeiro <span class="count">${fin.length}</span></h2>${grid(fin)}` : ''}
+        ${off.length ? `<details class="off-clients"><summary>Finalizados <span class="count">${off.length}</span></summary>${grid(off)}</details>` : ''}`
+      : emptyState('Nenhum cliente ainda', 'Cadastre seus clientes e os serviços que você faz para cada um. Depois é só dar ▶ no Painel.')
+  }`;
 }
 
 function viewCategorias() {
@@ -1068,7 +1177,9 @@ function viewCategorias() {
       return `<li class="cat-row" style="--c:${c.cor}">
         <span class="swatch"></span>
         <div class="cat-info"><strong>${esc(c.nome)}</strong>
-          <small class="muted">${nRec} tarefa${nRec === 1 ? '' : 's'} fixa${nRec === 1 ? '' : 's'}${isWork(c.id) ? ` · ${nCli} cliente${nCli === 1 ? '' : 's'}` : ''}</small></div>
+          <small class="muted">${nRec} tarefa${nRec === 1 ? '' : 's'} fixa${nRec === 1 ? '' : 's'}${isWork(c.id) ? ` · ${nCli} cliente${nCli === 1 ? '' : 's'}` : ''}${
+            itensOf(c).length ? ` · lista: ${esc(itensOf(c).map((i) => i.nome).join(', '))}` : ''
+          }</small></div>
         <div class="row-actions">
           <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="-1" aria-label="Mover para cima" ${i === 0 ? 'disabled' : ''}>${icon('up')}</button>
           <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="1" aria-label="Mover para baixo" ${i === S.categories.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
@@ -1082,7 +1193,7 @@ function viewCategorias() {
     <div><p class="eyebrow">Cadastros</p><h1>Categorias</h1></div>
     <button type="button" class="btn primary" data-action="new-cat">${icon('plus')}<span>Categoria</span></button>
   </header>
-  <p class="muted intro">A ordem aqui é a ordem em que as categorias aparecem na lista do dia.</p>
+  <p class="muted intro">A ordem aqui é a ordem em que as categorias aparecem na lista do dia. Uma categoria pode ter a própria lista (ex.: Cursos → Inglês, Fotografia), que ganha o ▶ no Painel.</p>
   ${rows ? `<ul class="card cat-list">${rows}</ul>` : emptyState('Nenhuma categoria', 'Crie categorias como Religião, Relacionamento, Trabalho e Saúde.')}`;
 }
 
@@ -1124,6 +1235,16 @@ function viewAjustes() {
         <select name="duracaoPadrao">${DURACOES.map((d) => `<option value="${d}" ${d === p.duracaoPadrao ? 'selected' : ''}>${d} min</option>`).join('')}</select></label>
     </section>
 
+    <section class="card">
+      <h2 class="card-title">${icon('horarios')}Seu dia (Relatórios)</h2>
+      <div class="row3">
+        <label class="field"><span>Acordo às</span><input type="time" name="acordar" value="${esc(p.acordar)}"></label>
+        <label class="field"><span>Começo até</span><input type="time" name="comecoAte" value="${esc(p.comecoAte)}"></label>
+        <label class="field"><span>Durmo às</span><input type="time" name="dormir" value="${esc(p.dormir)}"></label>
+      </div>
+      <p class="hint">O sono não entra na conta. Até a primeira tarefa (se ela começar antes do "começo até") conta como acordando; depois disso, o que não foi marcado aparece como "sem marcação".</p>
+    </section>
+
     ${notifCard()}
 
     ${importCard()}
@@ -1163,7 +1284,7 @@ function openTaskDetail(t) {
   const cli = cliById(t.clienteId);
   const run = isRunning(t);
   const sec = elapsed(t);
-  const sub = [cat?.nome, cli?.nome].filter(Boolean).map(esc).join(' · ');
+  const sub = [cat?.nome, cli?.nome, itemOf(t)?.nome].filter(Boolean).map(esc).join(' · ');
   openModal(`<div class="modal-body detail" style="--c:${colorOf(t)}">
     <header class="modal-head">
       <div class="detail-title">
@@ -1185,6 +1306,7 @@ function openTaskDetail(t) {
               ${icon(run ? 'pause' : 'play')}${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'}</button>`
       }
     </section>
+    ${sessionsHTML(t)}
     <label class="field notes-field"><span>${icon('nota')}Notas <em>só você vê</em></span>
       <textarea rows="9" data-notes data-id="${t.id}" data-date="${t.data}"
         placeholder="O que foi feito, onde errei, o que funcionou, próximos passos…">${esc(t.notas || '')}</textarea></label>
@@ -1202,6 +1324,203 @@ function openTaskDetail(t) {
   modal.dataset.detail = t.id;
 }
 
+// Cada vez que o cronômetro rodou: horário, duração e o que foi feito (dá para escrever ou corrigir depois).
+function sessionsHTML(t) {
+  const ss = t.sessoes || [];
+  if (!ss.length) return '';
+  const rows = ss
+    .map((s, k) => {
+      const fim = s.f || null;
+      const dur = ((fim || Date.now()) - s.i) / 1000;
+      return `<li class="sess${fim ? '' : ' on'}">
+        <span class="sess-time">${hhmm(s.i)}–${fim ? hhmm(fim) : 'agora'}</span>
+        <span class="sess-dur">${fim ? U.fmtDur(dur) : 'rodando'}</span>
+        <input class="sess-obs" data-sess-obs data-id="${t.id}" data-date="${t.data}" data-k="${k}" value="${esc(s.obs || '')}"
+          placeholder="O que fez? (ex.: 5 vídeos)" maxlength="300" aria-label="O que fez das ${hhmm(s.i)}">
+      </li>`;
+    })
+    .join('');
+  return `<section class="sessions"><h3 class="eyebrow">${icon('nota')}Sessões</h3><ul>${rows}</ul></section>`;
+}
+
+// Ao pausar: pergunta o que foi feito naquele pedaço de tempo (opcional).
+function openObsPrompt(t) {
+  const s = t.sessoes?.[t.sessoes.length - 1];
+  if (!s?.f) return;
+  openModal(`<form class="modal-body obs-prompt" data-form="obs" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
+    ${modalHead(`Pausado · ${esc(t.titulo)}`)}
+    <p class="muted sm">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}${hhmm(s.i)}–${hhmm(s.f)} · ${U.fmtDur((s.f - s.i) / 1000)}</p>
+    <label class="field"><span>O que você fez? <em>opcional</em></span>
+      <textarea name="obs" rows="3" maxlength="300" placeholder="Ex.: 5 vídeos editados" autofocus>${esc(s.obs || '')}</textarea></label>
+    <footer class="modal-actions">
+      <button type="button" class="btn ghost" data-action="close-modal">Pular</button>
+      <span class="grow"></span>
+      <button type="button" class="btn soft" data-action="obs-concluir">${icon('check')}Salvar e concluir</button>
+      <button type="submit" class="btn primary">Salvar</button>
+    </footer>
+  </form>`);
+}
+
+function saveObs(form) {
+  const t = findTask(form.dataset.id, form.dataset.date);
+  const s = t?.sessoes?.[t.sessoes.length - 1];
+  if (!s) return null;
+  const obs = form.elements.obs.value.trim();
+  if (obs) s.obs = obs;
+  else delete s.obs;
+  persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes }));
+  return t;
+}
+
+// Concluir: tarefa com horário e sem tempo registrado pergunta quanto tempo foi (já preenchido com o planejado).
+function openCheckTime(t) {
+  const ini = U.toMin(t.horario);
+  const isToday = t.data === U.todayStr();
+  const fim = t.fimAberto ? (isToday && U.nowMin() > ini ? U.nowMin() : null) : ini + duracao(t);
+  openModal(`<form class="modal-body" data-form="checktime" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
+    ${modalHead(`Concluir · ${esc(t.titulo)}`)}
+    <p class="muted sm">${t.fimAberto ? 'Que horas terminou?' : 'Foi esse o tempo? Se passou, mude o fim.'}</p>
+    <div class="row2">
+      <label class="field"><span>Começou</span><input type="time" name="ini" required value="${U.fromMin(ini)}"></label>
+      <label class="field"><span>Terminou</span><input type="time" name="fim" required value="${fim == null ? '' : U.fromMin(fim % 1440)}" ${fim == null ? 'autofocus' : ''}></label>
+    </div>
+    <footer class="modal-actions">
+      <button type="button" class="btn ghost" data-action="check-semtempo" data-id="${t.id}" data-date="${t.data}">Concluir sem tempo</button>
+      <span class="grow"></span>
+      <button type="submit" class="btn primary">${icon('check')}Registrar e concluir</button>
+    </footer>
+  </form>`);
+}
+
+// Marca como concluída (ou reabre). Concluir para o cronômetro.
+function setDone(t, done, extra = {}) {
+  const ops = [];
+  if (done && isRunning(t)) stopTimer(t, ops);
+  t.concluido = done;
+  Object.assign(t, extra);
+  if (S.pedirConclusao === t.id) S.pedirConclusao = null;
+  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { concluido: done, ...extra } });
+  render();
+  refreshDetail(t.id, t.data);
+  persist(db.batch(ops), () => (t.concluido = !done));
+}
+
+// ---------------------------------------------------------------------------
+// Iniciar tarefa: cliente → serviço (obrigatório) ou lista → tarefa opcional (ex.: Inglês → Estudar).
+// Cria (ou continua) a tarefa de hoje e liga o cronômetro.
+// ---------------------------------------------------------------------------
+
+function openStart({ cli, cat, item, bloco } = {}) {
+  const c = cliById(cli);
+  const k = catById(cat);
+  const it = itensOf(k).find((x) => x.id === item);
+  const back = `<button type="button" class="icon-btn" data-action="start-pick" aria-label="Voltar">${icon('left')}</button>`;
+  const grid = (btns) => `<div class="pick-grid">${btns}</div>`;
+
+  if (c) {
+    const servs = servicosOf(c);
+    openModal(`<div class="modal-body start" data-start-cli="${c.id}" data-start-bloco="${bloco || ''}">
+      <header class="modal-head">${back}<h2>${esc(c.nome)}</h2>
+        <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
+      ${
+        c.pedeNome
+          ? `<label class="field"><span>Nome da pessoa</span>
+          <input data-start-pessoa list="dl-pessoas" maxlength="80" autocomplete="off" placeholder="Ex.: Maria" autofocus>
+          <datalist id="dl-pessoas">${(c.pessoas || []).map((p) => `<option value="${esc(p)}">`).join('')}</datalist></label>`
+          : ''
+      }
+      <h3 class="pick-title">O que você vai fazer?</h3>
+      ${servs.length ? grid(servs.map((s) => `<button type="button" class="pick" data-action="start-go" data-serv="${esc(s)}">${icon('play')}${esc(s)}</button>`).join('')) : ''}
+      <form class="pick-new" data-form="start-novo">
+        <input name="servico" maxlength="60" autocomplete="off" placeholder="${servs.length ? 'Outro serviço' : 'Qual serviço? (ex.: Edição de vídeo)'}" ${servs.length || c.pedeNome ? '' : 'autofocus'}>
+        <button type="submit" class="btn soft">${icon('plus')}Adicionar e iniciar</button>
+      </form>
+    </div>`);
+    return;
+  }
+  if (k && it) {
+    const subs = subsOf(k);
+    if (!subs.length) return startTask({ catId: k.id, itemId: it.id, bloco });
+    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-item="${it.id}" data-start-bloco="${bloco || ''}">
+      <header class="modal-head">${back}<h2>${esc(it.nome)}</h2>
+        <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
+      <h3 class="pick-title">O que vai fazer? <em>opcional</em></h3>
+      ${grid(
+        subs.map((s) => `<button type="button" class="pick" data-action="start-go" data-serv="${esc(s)}">${icon('play')}${esc(s)}</button>`).join('') +
+          `<button type="button" class="pick soft" data-action="start-go" data-serv="">${icon('play')}Só iniciar</button>`,
+      )}
+    </div>`);
+    return;
+  }
+  // Escolha inicial: clientes ativos e as listas (só a categoria pedida, quando vem de um bloco da rotina).
+  // Bloco da rotina: Trabalho mostra só os clientes; uma lista (ex.: Cursos) mostra só os itens dela.
+  const cats = k ? (isWork(k.id) ? [] : [k]) : listCats();
+  const clis = k && !isWork(k.id) ? [] : startClients();
+  const sec = (titulo, btns) => (btns ? `<h3 class="pick-title">${titulo}</h3>${grid(btns)}` : '');
+  openModal(`<div class="modal-body start">
+    ${modalHead('Iniciar tarefa')}
+    ${sec('Clientes', clis.map((x) => `<button type="button" class="pick" data-action="start-pick" data-cli="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${workColor()}"></i>${esc(x.nome)}</button>`).join(''))}
+    ${cats
+      .map((cc) =>
+        sec(
+          esc(cc.nome),
+          itensOf(cc)
+            .map((x) => `<button type="button" class="pick" data-action="start-pick" data-cat="${cc.id}" data-item="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${cc.cor}"></i>${esc(x.nome)}</button>`)
+            .join(''),
+        ),
+      )
+      .join('')}
+    ${!clis.length && !cats.some((cc) => itensOf(cc).length) ? '<p class="muted">Cadastre clientes ou uma lista numa categoria (ex.: Cursos) para iniciar por aqui.</p>' : ''}
+  </div>`);
+}
+
+async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloco = '' }) {
+  const today = U.todayStr();
+  const list = await ensureDay(today);
+  const c = cliById(cliId);
+  const categoriaId = c ? workCatId() || c.categoriaId || null : catId;
+  const it = itensOf(catById(categoriaId)).find((x) => x.id === itemId);
+  servico = servico.trim();
+  pessoa = pessoa.trim();
+  const titulo = c ? [servico || c.nome, pessoa].filter(Boolean).join(' · ') : [it?.nome, servico].filter(Boolean).join(' · ');
+  const ops = [];
+  // Mesmo cliente/curso + mesmo serviço já aberto hoje: continua a mesma tarefa.
+  let t = visible(list).find(
+    (x) =>
+      !x.concluido &&
+      x.categoriaId === categoriaId &&
+      (x.clienteId || null) === (c?.id || null) &&
+      (x.itemId || null) === (it?.id || null) &&
+      (c ? norm(x.servico || x.titulo) === norm(servico) && norm(x.pessoa) === norm(pessoa) : norm(x.servico) === norm(servico) && !x.horario),
+  );
+  if (!t) {
+    t = {
+      id: U.newId(), titulo, categoriaId, clienteId: c?.id || null, itemId: it?.id || null, servico: servico || null, pessoa: pessoa || null,
+      data: today, horario: null, duracao: null, aviso: false, concluido: false, origem: 'avulsa', recurringTaskId: null, removido: false,
+    };
+    list.push(t);
+    ops.push({ type: 'set', col: 'dailyTasks', id: t.id, data: t });
+  }
+  if (c) {
+    // Serviço novo e nome novo ficam guardados no cliente para a próxima vez.
+    const patch = {};
+    if (servico && !servicosOf(c).some((s) => norm(s) === norm(servico))) patch.servicos = c.servicos = [...servicosOf(c), servico];
+    if (pessoa && !(c.pessoas || []).some((p) => norm(p) === norm(pessoa))) patch.pessoas = c.pessoas = [pessoa, ...(c.pessoas || [])].slice(0, 60);
+    if (Object.keys(patch).length) ops.push({ type: 'update', col: 'clients', id: c.id, data: patch });
+  }
+  // Veio de um bloco da rotina (ex.: "Cursos 8h–12h"): o bloco cumpriu o papel e sai das pendentes.
+  const b = bloco && list.find((x) => x.id === bloco);
+  if (b && b !== t && !b.concluido && !elapsed(b)) {
+    b.concluido = true;
+    ops.push({ type: 'update', col: 'dailyTasks', id: b.id, data: { concluido: true } });
+  }
+  if (!isRunning(t)) startTimer(t, ops);
+  closeModal();
+  render();
+  persist(db.batch(ops));
+  toast(`Cronômetro ligado: ${t.titulo}${c ? ` · ${c.nome}` : ''}`);
+}
+
 // Depois de play/pausa/concluir, atualiza o painel da tarefa se ele estiver aberto.
 function refreshDetail(id, date) {
   if (modal.open && modal.dataset.detail === id) {
@@ -1214,6 +1533,14 @@ function saveNotes(t) {
   persist(db.update('dailyTasks', t.id, { notas: t.notas || '' }));
   setStatus('[data-notes-status]', 'Salvo ✓');
 }
+
+// O que foi anotado em cada sessão (ao pausar).
+const sessObsHTML = (t) => {
+  const ss = (t.sessoes || []).filter((s) => s.obs);
+  return ss.length
+    ? `<ul class="hist-sess">${ss.map((s) => `<li><span class="muted">${hhmm(s.i)}${s.f ? `–${hhmm(s.f)}` : ''}</span> ${esc(s.obs)}</li>`).join('')}</ul>`
+    : '';
+};
 
 // Histórico de um cliente: tudo que foi feito, quanto tempo levou e as notas.
 async function openClientHistory(cli) {
@@ -1228,7 +1555,7 @@ async function openClientHistory(cli) {
   // Usa a versão em memória quando o dia já está aberto (pode ter mudanças ainda sendo salvas).
   rows = rows.map((r) => findTask(r.id, r.data) || r);
   const items = rows
-    .filter((t) => !t.removido && (t.notas?.trim() || elapsed(t) >= 60 || t.concluido))
+    .filter((t) => !t.removido && (t.notas?.trim() || elapsed(t) >= 60 || t.concluido || t.sessoes?.some((s) => s.obs)))
     .sort((a, b) => b.data.localeCompare(a.data) || U.byHorarioTitulo(a, b))
     .slice(0, 150);
   const total = sumTime(items);
@@ -1241,6 +1568,7 @@ async function openClientHistory(cli) {
           <strong>${t.concluido ? `<span class="hist-ok">${icon('check')}</span>` : ''}${esc(t.titulo)}</strong>
           ${elapsed(t) >= 60 ? `<span class="timer-chip">${icon('cronometro')}${U.fmtDur(elapsed(t))}</span>` : ''}
         </div>
+        ${sessObsHTML(t)}
         ${t.notas?.trim() ? `<p class="hist-notes">${esc(t.notas.trim())}</p>` : ''}
       </li>`,
     )
@@ -1453,6 +1781,28 @@ function viewRelatorios() {
       }
     </section>`;
 
+  // Por item de cada lista (ex.: Cursos → Inglês, Fotografia…)
+  const listaCards = S.categories
+    .filter((k) => allItens(k).length)
+    .map((k) => {
+      const its = timed.filter((t) => t.categoriaId === k.id);
+      const tot = sumTime(its);
+      if (tot < 60) return '';
+      const m = new Map();
+      its.forEach((t) => {
+        const it = itemOf(t);
+        const key = it ? it.id : '_sem';
+        const x = m.get(key) || { key, label: it ? it.nome : 'Sem escolher', cor: it ? `var(--serie-${(allItens(k).indexOf(it) % MAX_CORES_CLI) + 1})` : SEM_COR, sec: 0 };
+        x.sec += elapsed(t);
+        m.set(key, x);
+      });
+      return `<section class="card rel-card">
+        <h2 class="card-title"><i class="dot" style="--c:${k.cor}"></i>${esc(k.nome)}</h2>
+        ${donutHTML(`it${k.id}`, slices(m, tot), tot)}
+      </section>`;
+    })
+    .join('');
+
   return `${head}
   <div class="rel-tiles">${tiles.map(([v, l]) => `<div class="card rel-tile"><strong>${v}</strong><span>${l}</span></div>`).join('')}</div>
   <div class="rel-grid">
@@ -1461,6 +1811,8 @@ function viewRelatorios() {
       ${donutHTML('cat', slices(cats, total), total)}
     </section>
     ${cliCard}
+    ${listaCards}
+    ${seuDiaCard(from, to)}
   </div>
   ${barras}
   <section class="card rel-card">
@@ -1474,6 +1826,88 @@ function viewRelatorios() {
       </li>`,
       )
       .join('')}</ul>
+  </section>`;
+}
+
+// "Seu dia": do acordar ao dormir (o sono não conta), quanto foi marcado e onde ficou sem marcação.
+// Antes da 1ª tarefa, até o "começo" (8h) é "acordando"; depois disso, sem marcação de manhã.
+// Depois da última tarefa: sem marcação, provavelmente lazer.
+const SEU_DIA = [
+  ['marcado', 'Marcado (cronômetro)', '#22c55e'],
+  ['acordando', 'Acordando', '#a78bfa'],
+  ['manha', 'Sem marcação de manhã', '#f59e0b'],
+  ['entre', 'Sem marcação entre tarefas', '#94a3b8'],
+  ['lazer', 'Depois da última tarefa (provavelmente lazer)', '#38bdf8'],
+];
+
+function seuDiaCard(from, to) {
+  const p = S.profile;
+  const W0 = U.toMin(p.acordar || '07:00');
+  const c8 = Math.max(W0, U.toMin(p.comecoAte || '08:00'));
+  let W1 = U.toMin(p.dormir || '23:30');
+  if (W1 <= W0) W1 += 1440;
+  const today = U.todayStr();
+  const tot = Object.fromEntries(SEU_DIA.map(([k]) => [k, 0]));
+  let dias = 0;
+  let vazios = 0;
+  for (let d = from; d <= to && d <= today; d = U.addDays(d, 1)) {
+    const end = d === today ? Math.min(U.nowMin(), W1) : W1;
+    if (end <= W0) continue;
+    const base = U.parseYmd(d).getTime();
+    const iv = [];
+    let solto = 0; // tempo sem horário (cronômetro antigo, sem sessões)
+    for (const t of visible(S.days[d] || [])) {
+      const ss = (t.sessoes || []).filter((s) => s.i);
+      if (!ss.length) {
+        solto += elapsed(t) / 60;
+        continue;
+      }
+      for (const s of ss) {
+        const a = Math.max(W0, (s.i - base) / 60_000);
+        const b = Math.min(end, ((s.f || Date.now()) - base) / 60_000);
+        if (b > a) iv.push([a, b]);
+      }
+    }
+    iv.sort((x, y) => x[0] - y[0]);
+    const merged = [];
+    for (const x of iv) {
+      const last = merged[merged.length - 1];
+      if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]);
+      else merged.push([...x]);
+    }
+    // Dia sem nada marcado não entra (senão o dia inteiro vira "sem marcação").
+    if (!merged.length && solto < 1) {
+      vazios++;
+      continue;
+    }
+    dias++;
+    const marcado = merged.reduce((a, [s, e]) => a + e - s, 0);
+    const first = merged.length ? merged[0][0] : end;
+    const lastEnd = merged.length ? merged[merged.length - 1][1] : end;
+    const g = {
+      marcado,
+      acordando: Math.max(0, Math.min(first, c8, end) - W0),
+      manha: Math.max(0, first - c8),
+      entre: merged.slice(1).reduce((a, x, k) => a + x[0] - merged[k][1], 0),
+      lazer: Math.max(0, end - lastEnd),
+    };
+    // Tempo sem horário: entra como marcado e sai do que estava sem marcação.
+    for (const k of ['lazer', 'entre', 'manha']) {
+      const tira = Math.min(solto, g[k]);
+      g[k] -= tira;
+      g.marcado += tira;
+      solto -= tira;
+    }
+    for (const k in g) tot[k] += g[k] * 60;
+  }
+  const soma = Object.values(tot).reduce((a, b) => a + b, 0);
+  if (!dias || soma < 60) return '';
+  const m = new Map(SEU_DIA.map(([key, label, cor]) => [key, { key, label, cor, sec: tot[key] }]));
+  const items = [...m.values()].filter((x) => x.sec >= 1).map((x) => ({ ...x, pct: (x.sec * 100) / soma }));
+  return `<section class="card rel-card">
+    <h2 class="card-title">${icon('horarios')}Seu dia <small class="muted">(acordado${dias > 1 ? `, ${dias} dias` : ''})</small></h2>
+    ${donutHTML('dia', items, soma)}
+    <p class="muted sm">Das ${esc(p.acordar || '07:00')} às ${esc(p.dormir || '23:30')}; o sono não entra.${dias > 1 ? ` Marcado por dia: <strong>${U.fmtDur(tot.marcado / dias)}</strong>.` : ''}${vazios ? ` ${vazios} dia${vazios > 1 ? 's' : ''} sem nada marcado ${vazios > 1 ? 'ficaram' : 'ficou'} de fora.` : ''} Mude os horários nos <a href="#/ajustes">Ajustes</a>.</p>
   </section>`;
 }
 
@@ -1649,7 +2083,7 @@ async function planImport(data) {
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Arquivo de importação inválido.');
 
-  const plan = { cats: [], clis: [], recs: [], tasks: [], diario: [], avisos: [], erros: [] };
+  const plan = { cats: [], clis: [], upd: [], recs: [], tasks: [], diario: [], avisos: [], erros: [] };
   const catMap = new Map(S.categories.map((c) => [norm(c.nome), c]));
   const cliMap = new Map(S.clients.map((c) => [norm(c.nome), c]));
   let ordem = S.categories.length ? Math.max(...S.categories.map((c) => c.ordem ?? 0)) + 1 : 0;
@@ -1680,30 +2114,82 @@ async function planImport(data) {
     avisoAntes: numOuNull(it.avisoAntes ?? it.avisarAntes),
   });
 
+  // Mudança num cadastro que já existe (lista, serviços, situação): vira um "update".
+  const upd = (col, x, data, rotulo) => {
+    const novo = plan.cats.includes(x) || plan.clis.includes(x);
+    const mudou = Object.entries(data).filter(([k, v]) => JSON.stringify(x[k] ?? null) !== JSON.stringify(v));
+    if (!mudou.length) return;
+    const patch = Object.fromEntries(mudou);
+    if (novo) return Object.assign(x, patch);
+    const u = plan.upd.find((y) => y.id === x.id);
+    if (u) Object.assign(u.data, patch);
+    else plan.upd.push({ col, id: x.id, nome: x.nome, rotulo, data: patch });
+  };
+  const listaTxt = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[,;\n]+/) : []).map((x) => String(x).trim()).filter(Boolean);
+  // Estado do cadastro já com o que está para mudar.
+  const atual = (x) => ({ ...x, ...(plan.upd.find((y) => y.id === x.id)?.data || {}) });
+
   for (const c of Array.isArray(data.categorias) ? data.categorias : []) {
     const nome = typeof c === 'string' ? c : c?.nome;
-    if (!getCat(nome, c?.cor)) plan.erros.push('Categoria sem nome ignorada.');
+    const cat = getCat(nome, c?.cor);
+    if (!cat) { plan.erros.push('Categoria sem nome ignorada.'); continue; }
+    const itens = listaTxt(c?.itens ?? c?.lista);
+    const subs = listaTxt(c?.subtarefas);
+    if (itens.length || subs.length) {
+      const old = allItens(atual(cat));
+      const novos = itens.filter((n) => !old.some((o) => norm(o.nome) === norm(n))).map((n) => ({ id: U.newId(), nome: n }));
+      // Item que estava oculto e voltou na lista: aparece de novo.
+      const lista = old.map((o) => (o.oculto && itens.some((n) => norm(n) === norm(o.nome)) ? { id: o.id, nome: o.nome } : o));
+      const sub2 = [...subsOf(atual(cat))];
+      subs.forEach((x) => sub2.some((y) => norm(y) === norm(x)) || sub2.push(x));
+      upd('categories', cat, { itens: [...lista, ...novos], subtarefas: sub2 }, 'lista');
+    }
   }
   for (const c of Array.isArray(data.clientes) ? data.clientes : []) {
     const nome = typeof c === 'string' ? c : c?.nome;
-    if (!getCli(nome, c?.categoria, c?.observacoes)) plan.erros.push('Cliente sem nome ignorado.');
+    const cli = getCli(nome, c?.categoria, c?.observacoes);
+    if (!cli) { plan.erros.push('Cliente sem nome ignorado.'); continue; }
+    if (typeof c !== 'object') continue;
+    const d = {};
+    const servs = listaTxt(c.servicos);
+    if (servs.length) {
+      const all = [...servicosOf(atual(cli))];
+      servs.forEach((x) => all.some((y) => norm(y) === norm(x)) || all.push(x));
+      d.servicos = all;
+    }
+    if (c.status != null) d.status = norm(c.status).startsWith('final') ? 'finalizado' : 'ativo';
+    if (c.soFinanceiro != null) d.soFinanceiro = !!c.soFinanceiro;
+    if (c.pedeNome != null) d.pedeNome = !!c.pedeNome;
+    upd('clients', cli, d, 'cadastro');
   }
+  // Itens das listas como vão ficar (para achar "item" na rotina e nas tarefas).
+  const itensDe = (cat) => allItens(atual(cat));
 
   const recKeys = new Set();
-  const recKey = (r) => [norm(r.titulo), r.categoriaId, r.clienteId || '', r.horario].join('|');
+  const recKey = (r) => [norm(r.titulo), r.categoriaId, r.clienteId || '', r.horario, r.repete === 'mes' ? `m${r.diaDoMes}` : (r.diasDaSemana || []).join(',')].join('|');
   S.recurring.forEach((r) => recKeys.add(recKey(r)));
   for (const it of Array.isArray(data.rotina) ? data.rotina : []) {
     const titulo = String(it?.titulo ?? '').trim();
     const rotulo = titulo || '(sem título)';
     if (!titulo) { plan.erros.push('Tarefa fixa sem título ignorada.'); continue; }
-    const dias = parseDias(it.dias ?? it.diasDaSemana);
+    const mensal = norm(it.repete) === 'mes' || it.diaDoMes != null;
+    const diaDoMes = Math.round(Number(it.diaDoMes));
+    if (mensal && !(diaDoMes >= 1 && diaDoMes <= 31)) { plan.erros.push(`“${rotulo}”: dia do mês inválido.`); continue; }
+    const dias = mensal ? [] : parseDias(it.dias ?? it.diasDaSemana);
     if (!dias) { plan.erros.push(`“${rotulo}”: dias da semana não entendidos (${JSON.stringify(it.dias ?? '')}).`); continue; }
     const horario = parseHora(it.horario);
     if (!horario) { plan.erros.push(`“${rotulo}”: na rotina o horário é obrigatório.`); continue; }
     if (!it.categoria) plan.avisos.push(`“${rotulo}”: sem categoria, ficou em “Geral”.`);
     const cat = getCat(it.categoria || 'Geral');
     const cli = getCli(it.cliente, it.categoria);
-    const r = { id: U.newId(), titulo, categoriaId: cat.id, clienteId: cli?.id || null, diasDaSemana: dias, horario, duracao: numOuNull(it.duracao), ...aviso(it), ativo: true, inicio: U.todayStr() };
+    const item = it.item ? itensDe(cat).find((x) => norm(x.nome) === norm(it.item)) : null;
+    if (it.item && !item) plan.avisos.push(`“${rotulo}”: “${it.item}” não está na lista de ${cat.nome}.`);
+    const aberto = !!(it.semFim ?? it.fimAberto);
+    const r = {
+      id: U.newId(), titulo, categoriaId: cat.id, clienteId: cli?.id || null, itemId: item?.id || null,
+      repete: mensal ? 'mes' : 'semana', diaDoMes: mensal ? diaDoMes : null, diasDaSemana: dias,
+      horario, duracao: aberto ? null : numOuNull(it.duracao), fimAberto: aberto, ...aviso(it), ativo: true, inicio: U.todayStr(),
+    };
     const k = recKey(r);
     r._duplicada = recKeys.has(k);
     recKeys.add(k);
@@ -1721,6 +2207,8 @@ async function planImport(data) {
       // id fixo: importar o mesmo arquivo de novo atualiza a tarefa em vez de duplicar.
       id: `imp_${hashId(`${it.data}|${norm(titulo)}|${cli?.id || ''}`)}`,
       titulo, data: it.data, categoriaId: cat.id, clienteId: cli?.id || null,
+      itemId: (it.item && itensDe(cat).find((x) => norm(x.nome) === norm(it.item))?.id) || null,
+      servico: cli ? String(it.servico ?? titulo).trim() : null,
       horario: parseHora(it.horario), duracao: numOuNull(it.duracao), ...aviso(it),
       notas: String(it.notas ?? ''), concluido: !!it.concluido, origem: 'avulsa', recurringTaskId: null, removido: false,
     });
@@ -1749,21 +2237,24 @@ function openImportPreview(plan) {
   const lista = (arr, fmt) => `<ul class="imp-list">${arr.map((x) => `<li>${fmt(x)}</li>`).join('')}</ul>`;
   const catNome = (id) => esc((catById(id) || plan.cats.find((c) => c.id === id))?.nome || '');
   const cliNome = (id) => esc((cliById(id) || plan.clis.find((c) => c.id === id))?.nome || '');
-  const nada = !plan.cats.length && !plan.clis.length && !plan.recs.length && !plan.tasks.length && !plan.diario.length;
-  const porDia = U.ORDEM_SEMANA.map((d) => `${U.DIAS_CURTO[d]} ${plan.recs.filter((r) => r.diasDaSemana.includes(d)).length}`).join(' · ');
+  const nada = !plan.cats.length && !plan.clis.length && !plan.upd.length && !plan.recs.length && !plan.tasks.length && !plan.diario.length;
+  const porDia = U.ORDEM_SEMANA.map((d) => `${U.DIAS_CURTO[d]} ${plan.recs.filter((r) => r.diasDaSemana.includes(d)).length}`).join(' · ') +
+    (plan.recs.some(isMensal) ? ` · Mensal ${plan.recs.filter(isMensal).length}` : '');
+  const cliInfo = (c) => [c.status === 'finalizado' && 'finalizado', c.soFinanceiro && 'só financeiro', c.pedeNome && 'pede nome', servicosOf(c).join(', ')].filter(Boolean).join(' · ');
 
   openModal(`<div class="modal-body import-preview">
     ${modalHead('Importar')}
     ${nada ? '<p class="note">Não encontrei nada para importar neste arquivo.</p>' : ''}
     ${plan.cats.length ? `<section><h3>${plan.cats.length} categoria${plan.cats.length > 1 ? 's' : ''} nova${plan.cats.length > 1 ? 's' : ''}</h3>${lista(plan.cats, (c) => `<i class="dot" style="--c:${c.cor}"></i>${esc(c.nome)}`)}</section>` : ''}
-    ${plan.clis.length ? `<section><h3>${plan.clis.length} cliente${plan.clis.length > 1 ? 's' : ''} novo${plan.clis.length > 1 ? 's' : ''}</h3>${lista(plan.clis, (c) => `${esc(c.nome)} <small class="muted">${catNome(c.categoriaId)}</small>`)}</section>` : ''}
+    ${plan.clis.length ? `<section><h3>${plan.clis.length} cliente${plan.clis.length > 1 ? 's' : ''} novo${plan.clis.length > 1 ? 's' : ''}</h3>${lista(plan.clis, (c) => `${esc(c.nome)} <small class="muted">${esc(cliInfo(c)) || catNome(c.categoriaId)}</small>`)}</section>` : ''}
+    ${plan.upd.length ? `<section><h3>${plan.upd.length} cadastro${plan.upd.length > 1 ? 's' : ''} atualizado${plan.upd.length > 1 ? 's' : ''}</h3>${lista(plan.upd, (u) => `${esc(u.nome)} <small class="muted">${esc(u.col === 'clients' ? cliInfo({ ...cliById(u.id), ...u.data }) : itensOf({ ...catById(u.id), ...u.data }).map((i) => i.nome).join(', '))}</small>`)}</section>` : ''}
     ${
       plan.recs.length
-        ? `<section><h3>${plan.recs.length} tarefa${plan.recs.length > 1 ? 's' : ''} da rotina semanal</h3>
+        ? `<section><h3>${plan.recs.length} tarefa${plan.recs.length > 1 ? 's' : ''} da rotina</h3>
         <p class="muted sm">${porDia}</p>
         ${lista(
           [...plan.recs].sort(U.byHorarioTitulo),
-          (r) => `<span class="imp-time">${r.horario}</span>${esc(r.titulo)} <small class="muted">${catNome(r.categoriaId)}${r.clienteId ? ` · ${cliNome(r.clienteId)}` : ''}</small> ${dayDots(r.diasDaSemana, 'sm')}${r._duplicada ? ' <small class="muted">(já existe)</small>' : ''}`,
+          (r) => `<span class="imp-time">${r.horario}</span>${esc(r.titulo)} <small class="muted">${catNome(r.categoriaId)}${r.clienteId ? ` · ${cliNome(r.clienteId)}` : ''}${r.fimAberto ? ' · sem hora de fim' : ''}</small> ${isMensal(r) ? `<span class="chip month-chip">Todo dia ${r.diaDoMes}</span>` : dayDots(r.diasDaSemana, 'sm')}${r._duplicada ? ' <small class="muted">(já existe)</small>' : ''}`,
         )}</section>`
         : ''
     }
@@ -1804,6 +2295,10 @@ async function applyImport(plan, substituir) {
 
   plan.cats.forEach((c) => set('categories', c));
   plan.clis.forEach((c) => set('clients', c));
+  plan.upd.forEach((u) => {
+    ops.push({ type: 'update', col: u.col, id: u.id, data: u.data });
+    Object.assign((u.col === 'clients' ? cliById : catById)(u.id) || {}, u.data);
+  });
   recs.forEach((r) => set('recurringTasks', r));
   plan.tasks.forEach((t) => set('dailyTasks', t));
   plan.diario.forEach((j) => ops.push({ type: 'set', col: 'journal', id: j.data, data: { data: j.data, texto: j.texto, atualizadoEm: Date.now() } }));
@@ -1821,6 +2316,7 @@ async function applyImport(plan, substituir) {
   const partes = [
     plan.cats.length && `${plan.cats.length} categoria(s)`,
     plan.clis.length && `${plan.clis.length} cliente(s)`,
+    plan.upd.length && `${plan.upd.length} cadastro(s) atualizado(s)`,
     recs.length && `${recs.length} tarefa(s) da rotina`,
     plan.tasks.length && `${plan.tasks.length} tarefa(s) avulsa(s)`,
     plan.diario.length && `${plan.diario.length} dia(s) de diário`,
@@ -1841,24 +2337,39 @@ async function exportData() {
     formato: 'rotina-import',
     versao: 1,
     exportadoEm: new Date().toISOString(),
-    categorias: S.categories.map((c) => ({ nome: c.nome, cor: c.cor })),
-    clientes: S.clients.map((c) => limpa({ nome: c.nome, categoria: catNome(c.categoriaId), observacoes: c.observacoes })),
+    categorias: S.categories.map((c) =>
+      limpa({ nome: c.nome, cor: c.cor, itens: itensOf(c).length ? itensOf(c).map((i) => i.nome) : null, subtarefas: subsOf(c).length ? subsOf(c) : null }),
+    ),
+    clientes: S.clients.map((c) =>
+      limpa({
+        nome: c.nome, categoria: catNome(c.categoriaId), observacoes: c.observacoes, servicos: servicosOf(c).length ? servicosOf(c) : null,
+        status: isAtivo(c) ? null : 'finalizado', soFinanceiro: c.soFinanceiro || null, pedeNome: c.pedeNome || null,
+      }),
+    ),
     rotina: [...S.recurring].sort(U.byHorarioTitulo).map((r) =>
       limpa({
-        titulo: r.titulo, categoria: catNome(r.categoriaId), cliente: cliNome(r.clienteId),
-        dias: (r.diasDaSemana || []).map((d) => DIA_CODIGO[d]), horario: r.horario, duracao: r.duracao,
+        titulo: r.titulo, categoria: catNome(r.categoriaId), cliente: cliNome(r.clienteId), item: itemOf(r)?.nome,
+        dias: isMensal(r) ? null : (r.diasDaSemana || []).map((d) => DIA_CODIGO[d]),
+        repete: isMensal(r) ? 'mes' : null, diaDoMes: isMensal(r) ? r.diaDoMes : null,
+        horario: r.horario, duracao: r.duracao, semFim: r.fimAberto || null,
         aviso: r.aviso === false ? false : undefined, avisoAntes: r.avisoAntes,
       }),
     ),
     tarefas: tarefas
       .filter((t) => t.origem !== 'fixa' && !t.removido)
       .sort((a, b) => a.data.localeCompare(b.data))
-      .map((t) => limpa({ titulo: t.titulo, data: t.data, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), horario: t.horario, duracao: t.duracao, notas: t.notas, concluido: t.concluido || undefined })),
+      .map((t) => limpa({ titulo: t.titulo, data: t.data, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), item: itemOf(t)?.nome, servico: t.servico, horario: t.horario, duracao: t.duracao, notas: t.notas, concluido: t.concluido || undefined })),
     diario: diario.filter((j) => j.texto?.trim()).sort((a, b) => a.id.localeCompare(b.id)).map((j) => ({ data: j.id, texto: j.texto })),
     historico: tarefas
-      .filter((t) => !t.removido && (t.concluido || t.tempoGasto || t.notas?.trim()))
+      .filter((t) => !t.removido && (t.concluido || t.tempoGasto || t.notas?.trim() || t.sessoes?.length))
       .sort((a, b) => a.data.localeCompare(b.data))
-      .map((t) => limpa({ data: t.data, titulo: t.titulo, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), concluido: t.concluido || undefined, minutos: t.tempoGasto ? Math.round(t.tempoGasto / 60) : undefined, notas: t.notas })),
+      .map((t) =>
+        limpa({
+          data: t.data, titulo: t.titulo, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), item: itemOf(t)?.nome, servico: t.servico, pessoa: t.pessoa,
+          concluido: t.concluido || undefined, minutos: t.tempoGasto ? Math.round(t.tempoGasto / 60) : undefined, notas: t.notas,
+          sessoes: t.sessoes?.length ? t.sessoes.map((x) => limpa({ inicio: x.i ? new Date(x.i).toISOString() : null, fim: x.f ? new Date(x.f).toISOString() : null, obs: x.obs })) : undefined,
+        }),
+      ),
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -2149,13 +2660,28 @@ const modalFoot = (deleteAction, id) => `<footer class="modal-actions">
   <button type="button" class="btn ghost" data-action="close-modal">Cancelar</button>
   <button type="submit" class="btn primary">Salvar</button></footer>`;
 
+// Clientes finalizados e "só financeiro" ficam fora da lista (a não ser o que já está escolhido).
 const clientOptions = (catId, sel) =>
   `<option value="">Nenhum</option>` +
   clientsOf(catId)
-    .map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.nome)}</option>`)
+    .filter((c) => c.id === sel || (isAtivo(c) && !c.soFinanceiro))
+    .map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.nome)}${isAtivo(c) ? '' : ' (finalizado)'}</option>`)
     .join('');
 
-function catClientFields(catId, cliId) {
+const itemOptions = (catId, sel) => {
+  const k = catById(catId);
+  const list = allItens(k).filter((i) => !i.oculto || i.id === sel);
+  return `<option value="">Escolher na hora</option>${list.map((i) => `<option value="${i.id}" ${i.id === sel ? 'selected' : ''}>${esc(i.nome)}</option>`).join('')}`;
+};
+
+function catClientFields(catId, cliId, itemId) {
+  const temLista = itensOf(catById(catId)).length > 0;
+  const itemField = `<label class="field" data-item-field ${temLista ? '' : 'hidden'}><span>Qual <em>opcional</em></span>
+      <select name="itemId">${itemOptions(catId, itemId)}</select></label>`;
+  return catClientFieldsBase(catId, cliId) + itemField;
+}
+
+function catClientFieldsBase(catId, cliId) {
   if (!S.categories.length) return `<p class="note">Crie uma <a href="#/categorias">categoria</a> primeiro.</p>`;
   return `<div class="row2">
     <label class="field"><span>Categoria</span>
@@ -2168,8 +2694,15 @@ function catClientFields(catId, cliId) {
   </div>`;
 }
 
-const duracaoSelect = (val) =>
-  `<select name="duracao">${DURACOES.map((d) => `<option value="${d}" ${d === (val || S.profile.duracaoPadrao) ? 'selected' : ''}>${d} min</option>`).join('')}</select>`;
+const durLabel = (d) => (d < 60 ? `${d} min` : `${Math.floor(d / 60)}h${d % 60 ? ` ${d % 60}min` : ''}`);
+// Com "aberto": opção "Sem hora de fim" (ex.: igreja às 19h, termina quando termina).
+const duracaoSelect = (val, aberto = false) => {
+  const sel = val || S.profile.duracaoPadrao;
+  const lista = DURACOES.includes(sel) || sel === 'aberto' ? DURACOES : [...DURACOES, sel].sort((a, b) => a - b);
+  return `<select name="duracao">${lista.map((d) => `<option value="${d}" ${d === sel ? 'selected' : ''}>${durLabel(d)}</option>`).join('')}${
+    aberto ? `<option value="aberto" ${sel === 'aberto' ? 'selected' : ''}>Sem hora de fim</option>` : ''
+  }</select>`;
+};
 
 // "Avisar antes" de uma tarefa. Só faz sentido com horário (na lista do dia ele é opcional).
 function avisoFields(t) {
@@ -2189,13 +2722,17 @@ const defaultCat = (preferWork) =>
 function openDailyForm(t) {
   const editing = !!t.id;
   const fixa = editing && t.origem === 'fixa';
-  const catId = t.categoriaId || defaultCat(false);
+  const catId = t.categoriaId || (t.clienteId ? workCatId() : '') || defaultCat(false);
   openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}">
     ${modalHead(editing ? 'Editar tarefa' : 'Nova tarefa')}
-    ${fixa ? '<p class="note">Esta tarefa veio da rotina semanal. Mudanças aqui valem só para este dia.</p>' : ''}
+    ${fixa ? '<p class="note">Esta tarefa veio da rotina. Mudanças aqui valem só para este dia.</p>' : ''}
     <label class="field"><span>Título</span>
-      <input name="titulo" required maxlength="120" autocomplete="off" value="${esc(t.titulo || '')}" autofocus></label>
-    ${catClientFields(catId, t.clienteId)}
+      <input name="titulo" required maxlength="120" autocomplete="off" value="${esc(t.titulo || '')}" list="dl-serv" autofocus>
+      <datalist id="dl-serv"></datalist></label>
+    ${catClientFields(catId, t.clienteId, t.itemId)}
+    <label class="field" data-pessoa-field hidden><span>Nome da pessoa</span>
+      <input name="pessoa" maxlength="80" autocomplete="off" value="${esc(t.pessoa || '')}" list="dl-pessoas2">
+      <datalist id="dl-pessoas2"></datalist></label>
     <div class="row2">
       <label class="field"><span>Dia</span><input type="date" name="data" required value="${t.data}" ${fixa ? 'disabled' : ''}></label>
       <label class="field"><span>Horário <em>opcional</em></span><input type="time" name="horario" value="${t.horario || ''}" data-horario></label>
@@ -2213,18 +2750,45 @@ function openDailyForm(t) {
     ${modalFoot(editing ? 'remove-daily' : '', t.id)}
   </form>`);
   if (editing) modal.querySelector('[data-action="remove-daily"]').dataset.date = t.data;
+  servicosList(modal.querySelector('form'));
+}
+
+// Título da tarefa sugere os serviços do cliente escolhido (ou as tarefas da lista); cliente que pede nome mostra o campo.
+function servicosList(form) {
+  const dl = form?.querySelector('#dl-serv');
+  if (!dl) return;
+  const cat = catById(form.elements.categoriaId?.value);
+  const c = isWork(cat?.id) ? cliById(form.elements.clienteId?.value) : null;
+  const sugest = c ? servicosOf(c) : subsOf(cat);
+  dl.innerHTML = sugest.map((x) => `<option value="${esc(x)}">`).join('');
+  const pf = form.querySelector('[data-pessoa-field]');
+  if (pf) {
+    pf.hidden = !c?.pedeNome;
+    pf.querySelector('datalist').innerHTML = (c?.pessoas || []).map((x) => `<option value="${esc(x)}">`).join('');
+  }
 }
 
 function openRecForm(r) {
   const editing = !!r.id;
   const dias = r.diasDaSemana || [1, 2, 3, 4, 5];
   const catId = r.categoriaId || defaultCat(!!r.clienteId);
+  const mensal = isMensal(r);
   openModal(`<form class="modal-body" data-form="rec" data-id="${r.id || ''}">
     ${modalHead(editing ? 'Editar tarefa fixa' : 'Nova tarefa fixa')}
     <label class="field"><span>Título</span>
       <input name="titulo" required maxlength="120" autocomplete="off" value="${esc(r.titulo || '')}" autofocus></label>
-    ${catClientFields(catId, r.clienteId)}
+    ${catClientFields(catId, r.clienteId, r.itemId)}
     <fieldset class="field">
+      <legend>Repete</legend>
+      <div class="seg">
+        <label class="seg-opt"><input type="radio" name="repete" value="semana" data-repete ${mensal ? '' : 'checked'}><span>Dias da semana</span></label>
+        <label class="seg-opt"><input type="radio" name="repete" value="mes" data-repete ${mensal ? 'checked' : ''}><span>Todo mês</span></label>
+      </div>
+    </fieldset>
+    <label class="field" data-rep-mes ${mensal ? '' : 'hidden'}><span>Dia do mês</span>
+      <input type="number" name="diaDoMes" min="1" max="31" inputmode="numeric" value="${r.diaDoMes || Number(U.todayStr().slice(8))}">
+      <small class="hint">Em mês mais curto (ex.: dia 31 em abril), cai no último dia.</small></label>
+    <fieldset class="field" data-rep-semana ${mensal ? 'hidden' : ''}>
       <legend>Repete em</legend>
       <div class="day-picks">${U.ORDEM_SEMANA.map(
         (d) => `<label class="day-pick"><input type="checkbox" name="dias" value="${d}" ${dias.includes(d) ? 'checked' : ''}><span>${U.DIAS_CURTO[d]}</span></label>`,
@@ -2237,7 +2801,7 @@ function openRecForm(r) {
     </fieldset>
     <div class="row2">
       <label class="field"><span>Horário</span><input type="time" name="horario" required value="${r.horario || ''}"></label>
-      <label class="field"><span>Duração</span>${duracaoSelect(r.duracao)}</label>
+      <label class="field"><span>Duração</span>${duracaoSelect(r.fimAberto ? 'aberto' : r.duracao, true)}</label>
     </div>
     ${avisoFields(r)}
     <p class="hint">O horário organiza a agenda do dia e os avisos. Você pode concluir a tarefa a qualquer hora do dia.</p>
@@ -2250,7 +2814,23 @@ function openClientForm(c) {
   openModal(`<form class="modal-body" data-form="client" data-id="${c.id || ''}">
     ${modalHead(editing ? 'Editar cliente' : 'Novo cliente')}
     <label class="field"><span>Nome</span><input name="nome" required maxlength="80" autocomplete="off" value="${esc(c.nome || '')}" autofocus></label>
-    <label class="field"><span>Observações <em>opcional</em></span><textarea name="observacoes" rows="3" maxlength="500">${esc(c.observacoes || '')}</textarea></label>
+    <fieldset class="field"><legend>Situação</legend>
+      <div class="seg">
+        <label class="seg-opt"><input type="radio" name="status" value="ativo" ${isAtivo(c) ? 'checked' : ''}><span>Ativo</span></label>
+        <label class="seg-opt"><input type="radio" name="status" value="finalizado" ${isAtivo(c) ? '' : 'checked'}><span>Finalizado</span></label>
+      </div>
+      <small class="hint">Finalizado sai das listas, mas continua no histórico e pode voltar.</small>
+    </fieldset>
+    <label class="field"><span>Serviços <em>um por linha</em></span>
+      <textarea name="servicos" rows="3" maxlength="800" placeholder="Edição de vídeo&#10;Contas">${esc(servicosOf(c).join('\n'))}</textarea>
+      <small class="hint">Aparecem ao apertar ▶ neste cliente. Dá para criar outro na hora.</small></label>
+    <div class="setting-rows">
+      <label class="switch-row"><input type="checkbox" name="soFinanceiro" ${c.soFinanceiro ? 'checked' : ''}><span class="switch" aria-hidden="true"></span>
+        <span>Só financeiro <small class="muted">(não aparece no ▶, só no dinheiro)</small></span></label>
+      <label class="switch-row"><input type="checkbox" name="pedeNome" ${c.pedeNome ? 'checked' : ''}><span class="switch" aria-hidden="true"></span>
+        <span>Pedir o nome da pessoa ao iniciar <small class="muted">(ex.: Fotografia)</small></span></label>
+    </div>
+    <label class="field"><span>Observações <em>opcional</em></span><textarea name="observacoes" rows="2" maxlength="500">${esc(c.observacoes || '')}</textarea></label>
     ${modalFoot(editing ? 'delete-client' : '', c.id)}
   </form>`);
 }
@@ -2269,26 +2849,88 @@ function openCatForm(c) {
           <input type="color" name="corLivre" value="${custom ? cor : '#888888'}" aria-label="Escolher outra cor"></label>
       </div>
     </fieldset>
+    ${
+      editing && isWork(c.id)
+        ? '<p class="hint">Esta é a categoria dos clientes: os serviços ficam em cada cliente.</p>'
+        : `<label class="field"><span>Lista <em>opcional, um por linha</em></span>
+      <textarea name="itens" rows="3" maxlength="800" placeholder="Inglês&#10;Fotografia&#10;Instagram">${esc(itensOf(c).map((i) => i.nome).join('\n'))}</textarea>
+      <small class="hint">Ex.: em Cursos, cada curso. Ao apertar ▶ você escolhe qual, e os relatórios mostram o tempo de cada um.</small></label>
+    <label class="field"><span>Tarefas da lista <em>opcional, um por linha</em></span>
+      <textarea name="subtarefas" rows="2" maxlength="400" placeholder="Estudar&#10;Praticar">${esc(subsOf(c).join('\n'))}</textarea>
+      <small class="hint">Perguntadas ao iniciar (dá para pular com “Só iniciar”).</small></label>`
+    }
     ${modalFoot(editing ? 'delete-cat' : '', c.id)}
   </form>`);
 }
 
 const formData = (form) => Object.fromEntries(new FormData(form));
+// Texto "um por linha" → lista sem vazios nem repetidos.
+const linhas = (txt) => {
+  const out = [];
+  for (const l of String(txt || '').split('\n')) {
+    const v = l.trim().slice(0, 60);
+    if (v && !out.some((o) => norm(o) === norm(v))) out.push(v);
+  }
+  return out.slice(0, 40);
+};
 const avisoData = (f) => ({ aviso: f.aviso === 'on', avisoAntes: Number(f.avisoAntes) || 0 });
 
 const FORMS = {
+  obs(form) {
+    saveObs(form);
+    closeModal();
+  },
+
+  checktime(form) {
+    const t = findTask(form.dataset.id, form.dataset.date);
+    if (!t) return closeModal();
+    const ini = U.toMin(form.elements.ini.value);
+    let fim = U.toMin(form.elements.fim.value);
+    if (ini == null || fim == null) return toast('Preencha o começo e o fim.');
+    if (fim <= ini) fim += 1440; // passou da meia-noite
+    const i = tsOf(t.data, ini);
+    const f = tsOf(t.data, fim);
+    const sessoes = [...(t.sessoes || []), { i, f, manual: true }];
+    const tempoGasto = Math.round((t.tempoGasto || 0) + (f - i) / 1000);
+    t.sessoes = sessoes;
+    t.tempoGasto = tempoGasto;
+    closeModal();
+    setDone(t, true, { sessoes, tempoGasto });
+  },
+
+  'start-novo'(form) {
+    const servico = form.elements.servico.value.trim();
+    if (!servico) return form.elements.servico.focus();
+    const box = form.closest('.modal-body');
+    const pessoa = box.querySelector('[data-start-pessoa]');
+    if (pessoa && !pessoa.value.trim()) {
+      pessoa.focus();
+      return toast('Escreva o nome da pessoa.');
+    }
+    return startTask({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+  },
+
   daily(form) {
     const f = formData(form);
     const id = form.dataset.id;
+    const cli = isWork(f.categoriaId) ? cliById(f.clienteId) : null;
     const patch = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
-      clienteId: (isWork(f.categoriaId) && f.clienteId) || null,
+      clienteId: cli?.id || null,
+      itemId: (itensOf(catById(f.categoriaId)).length && f.itemId) || null,
+      servico: cli ? f.titulo.trim() : null,
+      pessoa: (cli?.pedeNome && f.pessoa?.trim()) || null,
       horario: f.horario || null,
       duracao: Number(f.duracao) || null,
       ...avisoData(f),
     };
     if (!patch.titulo) return;
+    // Nome novo (ex.: Fotografia) fica guardado no cliente para a próxima vez.
+    if (patch.pessoa && !(cli.pessoas || []).some((x) => norm(x) === norm(patch.pessoa))) {
+      cli.pessoas = [patch.pessoa, ...(cli.pessoas || [])].slice(0, 60);
+      persist(db.update('clients', cli.id, { pessoas: cli.pessoas }));
+    }
     if (id) {
       const oldDate = form.dataset.oldDate;
       const newDate = f.data || oldDate;
@@ -2319,20 +2961,28 @@ const FORMS = {
 
   async rec(form) {
     const f = formData(form);
+    const mensal = f.repete === 'mes';
     const dias = new FormData(form).getAll('dias').map(Number).sort();
-    if (!dias.length) return toast('Escolha pelo menos um dia da semana.');
+    const diaDoMes = Math.min(31, Math.max(1, Math.round(Number(f.diaDoMes) || 0)));
+    if (mensal && !Number(f.diaDoMes)) return toast('Escolha o dia do mês.');
+    if (!mensal && !dias.length) return toast('Escolha pelo menos um dia da semana.');
+    const aberto = f.duracao === 'aberto';
     const data = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
       clienteId: (isWork(f.categoriaId) && f.clienteId) || null,
+      itemId: (itensOf(catById(f.categoriaId)).length && f.itemId) || null,
       horario: f.horario || null,
-      duracao: Number(f.duracao) || null,
+      duracao: aberto ? null : Number(f.duracao) || null,
+      fimAberto: aberto,
       ...avisoData(f),
-      diasDaSemana: dias,
+      repete: mensal ? 'mes' : 'semana',
+      diaDoMes: mensal ? diaDoMes : null,
+      diasDaSemana: mensal ? [] : dias,
       ativo: true,
     };
     if (!data.titulo) return;
-    if (!data.horario) return toast('Na rotina semanal o horário é obrigatório.');
+    if (!data.horario) return toast('Na rotina o horário é obrigatório.');
     const id = form.dataset.id;
     const today = U.todayStr();
     closeModal();
@@ -2340,11 +2990,11 @@ const FORMS = {
       Object.assign(S.recurring.find((r) => r.id === id) || {}, data);
       // Atualiza as tarefas já geradas de hoje em diante que ainda não foram concluídas.
       const inst = await db.where('dailyTasks', 'recurringTaskId', '==', id);
-      const { diasDaSemana, ativo, ...fields } = data;
+      const { diasDaSemana, ativo, repete, diaDoMes: _d, ...fields } = data;
       const ops = [{ type: 'update', col: 'recurringTasks', id, data }];
       for (const t of inst) {
         if (t.data < today || t.concluido) continue;
-        if (!dias.includes(U.weekdayOf(t.data))) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
+        if (!repeatsOn(data, t.data)) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
         else ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: fields });
       }
       persist(db.batch(ops));
@@ -2359,7 +3009,15 @@ const FORMS = {
 
   client(form) {
     const f = formData(form);
-    const data = { nome: f.nome.trim(), categoriaId: workCatId(), observacoes: f.observacoes.trim() };
+    const data = {
+      nome: f.nome.trim(),
+      categoriaId: workCatId(),
+      observacoes: f.observacoes.trim(),
+      status: f.status === 'finalizado' ? 'finalizado' : 'ativo',
+      servicos: linhas(f.servicos),
+      soFinanceiro: f.soFinanceiro === 'on',
+      pedeNome: f.pedeNome === 'on',
+    };
     if (!data.nome) return;
     const id = form.dataset.id;
     if (id) {
@@ -2393,6 +3051,14 @@ const FORMS = {
     const data = { nome: f.nome.trim(), cor: f.cor === 'custom' ? f.corLivre : f.cor };
     if (!data.nome) return;
     const id = form.dataset.id;
+    if ('itens' in f) {
+      // Mantém o id de cada item pelo nome, para o histórico continuar ligado.
+      // Item tirado da lista fica guardado como oculto (o histórico dele continua com nome).
+      const old = allItens(catById(id));
+      const novos = linhas(f.itens).map((nome) => ({ id: old.find((o) => norm(o.nome) === norm(nome))?.id || U.newId(), nome }));
+      data.itens = [...novos, ...old.filter((o) => !novos.some((n) => n.id === o.id)).map((o) => ({ ...o, oculto: true }))];
+      data.subtarefas = linhas(f.subtarefas);
+    }
     if (id) {
       Object.assign(catById(id) || {}, data);
       persist(db.update('categories', id, data));
@@ -2413,7 +3079,7 @@ function saveSetting(el) {
   let val = el.type === 'checkbox' ? el.checked : el.value;
   if (['agendaInicio', 'agendaFim', 'duracaoPadrao', 'avisoAntes'].includes(name)) val = Number(val);
   if (name === 'apelido') val = val.trim();
-  if (name === 'notifPendentesHora' && !val) return;
+  if (['notifPendentesHora', 'acordar', 'comecoAte', 'dormir'].includes(name) && !val) return;
   S.profile[name] = val;
   if (name === 'agendaInicio' && S.profile.agendaFim <= val) S.profile.agendaFim = Math.min(24, val + 1);
   if (name === 'agendaFim' && S.profile.agendaInicio >= val) S.profile.agendaInicio = Math.max(0, val - 1);
@@ -2513,14 +3179,32 @@ const ACTIONS = {
   toggle: ({ id, date }) => {
     const t = findTask(id, date);
     if (!t) return;
-    const ops = [];
-    if (!t.concluido && isRunning(t)) stopTimer(t, ops); // concluiu: o cronômetro para
-    t.concluido = !t.concluido;
-    if (S.pedirConclusao === id) S.pedirConclusao = null;
-    ops.push({ type: 'update', col: 'dailyTasks', id, data: { concluido: t.concluido } });
-    render();
-    refreshDetail(id, date);
-    persist(db.batch(ops), () => (t.concluido = !t.concluido));
+    // Concluir tarefa com horário sem ter usado o cronômetro: pergunta o tempo (já preenchido com o planejado).
+    if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && t.horario) return openCheckTime(t);
+    setDone(t, !t.concluido);
+  },
+  'check-semtempo': ({ id, date }) => {
+    const t = findTask(id, date);
+    closeModal();
+    if (t) setDone(t, true);
+  },
+  'obs-concluir': (_, el) => {
+    const t = saveObs(el.closest('form'));
+    closeModal();
+    if (t) setDone(t, true);
+  },
+  'start-pick': ({ cli, cat, item, bloco }) => openStart({ cli, cat, item, bloco }),
+  'start-go': ({ serv }, el) => {
+    const box = el.closest('.modal-body');
+    const pessoa = box.querySelector('[data-start-pessoa]');
+    if (box.dataset.startCli) {
+      if (pessoa && !pessoa.value.trim()) {
+        pessoa.focus();
+        return toast('Escreva o nome da pessoa.');
+      }
+      return startTask({ cliId: box.dataset.startCli, servico: serv, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+    }
+    return startTask({ catId: box.dataset.startCat, itemId: box.dataset.startItem, servico: serv, bloco: box.dataset.startBloco });
   },
   'open-task': ({ id, date }) => {
     const t = findTask(id, date);
@@ -2559,19 +3243,26 @@ const ACTIONS = {
     const t = findTask(id, date);
     if (!t) return;
     const ops = [];
-    if (isRunning(t)) {
+    const run = isRunning(t);
+    // Bloco da rotina de Cursos (lista) ou de Trabalho sem cliente: primeiro escolhe o curso ou o cliente.
+    const escolher = itensOf(catById(t.categoriaId)).length || (isWork(t.categoriaId) && !t.clienteId && startClients().length);
+    if (!run && !t.itemId && !elapsed(t) && escolher) return openStart({ cat: t.categoriaId, bloco: t.data === U.todayStr() ? t.id : '' });
+    const detailOpen = modal.open && modal.dataset.detail === id;
+    if (run) {
       stopTimer(t, ops);
       S.pedirConclusao = id; // aparece o ✓ "Finalizou?" ao lado do cronômetro
     } else {
       if (S.pedirConclusao === id) S.pedirConclusao = null;
-      // Uma coisa de cada vez: pausa o que estiver rodando.
-      for (const list of Object.values(S.days)) for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops);
-      t.cronometroInicio = Date.now();
-      ops.push({ type: 'update', col: 'dailyTasks', id, data: { cronometroInicio: t.cronometroInicio } });
+      startTimer(t, ops); // uma coisa de cada vez: pausa o que estiver rodando
     }
     render();
     refreshDetail(id, date);
     persist(db.batch(ops));
+    if (run) {
+      // Pausou: pergunta o que foi feito. Com a tarefa aberta, o campo da sessão já fica ali.
+      if (detailOpen) modal.querySelector('.sess:last-child .sess-obs')?.focus();
+      else openObsPrompt(t);
+    }
   },
   'new-daily': ({ date, cat, cli }) => openDailyForm({ data: date || S.date, categoriaId: cat, clienteId: cli }),
   'edit-daily': ({ id, date }) => {
@@ -2635,14 +3326,15 @@ const ACTIONS = {
   },
 
   'rotina-dia': ({ d }) => {
-    S.rotinaDia = d === 'all' ? 'all' : Number(d);
+    S.rotinaDia = d === 'all' || d === 'mes' ? d : Number(d);
     render();
   },
   'new-rec': ({ cat, cli }) =>
     openRecForm({
       categoriaId: cat,
       clienteId: cli,
-      diasDaSemana: S.rotinaDia === 'all' ? [1, 2, 3, 4, 5] : [S.rotinaDia],
+      repete: S.rotinaDia === 'mes' ? 'mes' : 'semana',
+      diasDaSemana: typeof S.rotinaDia === 'number' ? [S.rotinaDia] : [1, 2, 3, 4, 5],
     }),
   'edit-rec': ({ id }) => {
     const r = S.recurring.find((x) => x.id === id);
@@ -2780,6 +3472,18 @@ document.addEventListener('change', (e) => {
     const field = t.form.querySelector('[data-client-field]');
     field.hidden = !isWork(t.value);
     field.querySelector('select').innerHTML = clientOptions(t.value, '');
+    const item = t.form.querySelector('[data-item-field]');
+    if (item) {
+      item.hidden = !itensOf(catById(t.value)).length;
+      item.querySelector('select').innerHTML = itemOptions(t.value, '');
+    }
+    servicosList(t.form);
+  } else if (t.matches('select[name="clienteId"]')) {
+    servicosList(t.form);
+  } else if (t.matches('[data-repete]')) {
+    const mes = t.value === 'mes';
+    t.form.querySelector('[data-rep-mes]').hidden = !mes;
+    t.form.querySelector('[data-rep-semana]').hidden = mes;
   } else if (t.name === 'corLivre') {
     const radio = t.form.querySelector('input[name="cor"][value="custom"]');
     radio.checked = true;
@@ -2802,6 +3506,18 @@ document.addEventListener('input', (e) => {
     t.notas = el.value;
     setStatus('[data-notes-status]', 'Salvando…');
     debounceSave(`notas:${t.id}`, () => saveNotes(t));
+  } else if (el.matches('[data-sess-obs]')) {
+    const t = findTask(el.dataset.id, el.dataset.date);
+    const s = t?.sessoes?.[Number(el.dataset.k)];
+    if (!s) return;
+    const v = el.value.trim();
+    if (v) s.obs = v;
+    else delete s.obs;
+    setStatus('[data-notes-status]', 'Salvando…');
+    debounceSave(`sess:${t.id}`, () => {
+      persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes }));
+      setStatus('[data-notes-status]', 'Salvo ✓');
+    });
   } else if (el.matches('[data-journal]')) {
     const d = el.dataset.date;
     S.journal[d] = { ...S.journal[d], id: d, texto: el.value };
@@ -2848,10 +3564,14 @@ setInterval(() => {
 
 setInterval(notifTick, 30_000);
 
-// Cronômetros rodando: atualiza só o número na tela, a cada segundo.
+// Cronômetros rodando e o relógio: atualiza só o número na tela, a cada segundo.
 setInterval(() => {
   document.querySelectorAll('[data-live]').forEach((el) => {
     el.textContent = U.fmtRelogio(Number(el.dataset.base) + (Date.now() - Number(el.dataset.start)) / 1000);
+  });
+  const hora = U.horaBR();
+  document.querySelectorAll('[data-clock]').forEach((el) => {
+    if (el.textContent !== hora) el.textContent = hora;
   });
 }, 1000);
 
