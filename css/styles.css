@@ -4305,3 +4305,7 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-hora-top strong small { font-size: 12px; font-weight: 600; color: var(--muted); }
 .fin-hora .bar { flex: none; height: 6px; }
 .fin-hora .bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--pos, var(--accent)); }
+
+/* Encaixe de tarefa num horário ocupado */
+.encaixe-lista { margin: 8px 0 4px; padding-left: 20px; display: grid; gap: 4px; }
+.encaixe-lista li { font-weight: 600; }
