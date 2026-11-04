@@ -1,7 +1,7 @@
 // Service worker: permite instalar o app e abrir sem internet.
 // Estratégia "rede primeiro": sempre busca a versão nova e usa o cache só se estiver offline.
 
-const CACHE = 'rotina-v4';
+const CACHE = 'rotina-v5';
 const SHELL = [
   './',
   './index.html',
@@ -63,11 +63,11 @@ self.addEventListener('push', (e) => {
   try {
     payload = e.data ? e.data.json() : {};
   } catch {
-    payload = { data: { title: 'Rotina', body: e.data ? e.data.text() : '' } };
+    payload = { data: { title: 'Segundo Cérebro', body: e.data ? e.data.text() : '' } };
   }
   const n = payload.data || payload.notification || payload;
   e.waitUntil(
-    self.registration.showNotification(n.title || 'Rotina', {
+    self.registration.showNotification(n.title || 'Segundo Cérebro', {
       body: n.body || '',
       tag: n.tag || undefined,
       icon: 'icons/icon-192.png',
