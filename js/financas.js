@@ -27,10 +27,12 @@ const TABS = [
   ['despesas', 'Despesas'],
   ['contas', 'Contas'],
   ['estimativa', 'Estimativa'],
+  ['hora', 'Por hora'],
 ];
 
 export function createFin(ctx) {
   const { S, db, U, esc, icon, openModal, closeModal, toast, persist, render, ask, modalHead, modalFoot, isAtivo, norm } = ctx;
+  const { workCatId, ensureRange, elapsed, visible } = ctx;
 
   // -------------------------------------------------------------------------
   // Estado e dados
@@ -41,6 +43,7 @@ export function createFin(ctx) {
   S.finTab = 'resumo';
   S.finSemana = null; // segunda-feira da semana aberta no calendário de gastos
   S.finDia = null;
+  S.finHoraPer = 'mes';
   S.finF = {
     receitas: { per: 'mes', de: '', ate: '', cli: '', cat: '', q: '' },
     despesas: { per: 'mes', de: '', ate: '', cat: '', onde: '', q: '' },
@@ -155,7 +158,16 @@ export function createFin(ctx) {
       return `<header class="page-head"><div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div></header>
         <div class="loading"><span></span><span></span><span></span></div>`;
     }
-    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML }[S.finTab] || resumoHTML;
+    // No celular as abas rolam para o lado: deixa a aba aberta à vista depois de desenhar.
+    setTimeout(() => {
+      const nav = document.querySelector('.fin-tabs');
+      const on = nav?.querySelector('.fin-tab.on');
+      if (!on) return;
+      const n = nav.getBoundingClientRect();
+      const o = on.getBoundingClientRect();
+      if (o.right > n.right || o.left < n.left) nav.scrollLeft += o.left - n.left - (n.width - o.width) / 2;
+    });
+    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML }[S.finTab] || resumoHTML;
     return `
     <header class="page-head fin-head">
       <div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div>
@@ -550,6 +562,102 @@ export function createFin(ctx) {
           }</section>`;
         })
         .join('')}
+    </div>`;
+  }
+
+  // ---------- Valor da hora por cliente ----------
+  // Receita do cliente no período ÷ horas do cronômetro nas tarefas dele no mesmo período.
+
+  const PER_HORA = [
+    ['mes', 'Mês', 1],
+    ['3m', '3 meses', 3],
+    ['12m', '12 meses', 12],
+  ];
+  const MIN_HORAS = 0.25; // menos de 15 min não dá um valor confiável
+
+  function horaHTML() {
+    const [per, , n] = PER_HORA.find((p) => p[0] === S.finHoraPer) || PER_HORA[0];
+    const de = `${U.addMonths(S.finMes, 1 - n)}-01`;
+    const ate = fimDoMes(S.finMes);
+    const hoje = U.todayStr();
+    const ateTempo = ate < hoje ? ate : hoje;
+    const nomePer = n === 1 ? U.fmtMes(S.finMes) : `${mesCurto(de.slice(0, 7))} a ${mesCurto(S.finMes)}`;
+    const chips = `<div class="tab-chips fin-hora-chips">${PER_HORA.map(
+      ([id, l]) => `<button type="button" class="tab-chip${id === per ? ' on' : ''}" data-action="fin-hora-per" data-per="${id}">${l}</button>`,
+    ).join('')}</div>`;
+
+    // Tempo: só dá para somar até hoje (o futuro ainda não foi trabalhado).
+    if (de <= ateTempo && !ensureRange(de, ateTempo)) {
+      return `${chips}<div class="loading"><span></span><span></span><span></span></div>`;
+    }
+    const wid = workCatId();
+    const linhas = new Map();
+    const linha = (id) => {
+      if (!linhas.has(id)) linhas.set(id, { id, seg: 0, rec: 0, aRec: 0 });
+      return linhas.get(id);
+    };
+    let segTrabalho = 0;
+    for (let d = de; d <= ateTempo; d = U.addDays(d, 1)) {
+      for (const t of visible(S.days[d] || [])) {
+        const seg = elapsed(t);
+        if (seg < 1 || !(t.clienteId || (wid && t.categoriaId === wid))) continue;
+        segTrabalho += seg;
+        linha(t.clienteId || '_sem').seg += seg;
+      }
+    }
+    for (const t of F().tx) {
+      if (t.tipo !== 'entrada' || !t.clienteId || t.data < de || t.data > ate) continue;
+      const x = linha(t.clienteId);
+      if (t.realizado) x.rec += t.valor;
+      else x.aRec += t.valor;
+    }
+    const lista = [...linhas.values()].map((x) => {
+      const h = x.seg / 3600;
+      const total = r2(x.rec + x.aRec);
+      return { ...x, h, total, vh: h >= MIN_HORAS && x.id !== '_sem' ? total / h : null };
+    });
+    // A média só usa a receita de quem teve tempo marcado; o resto fica de fora e aparece no aviso.
+    const recTotal = r2(lista.filter((x) => x.seg >= 60).reduce((s, x) => s + x.total, 0));
+    const semTempo = r2(lista.filter((x) => x.seg < 60).reduce((s, x) => s + x.total, 0));
+    const hTotal = segTrabalho / 3600;
+    const media = hTotal >= MIN_HORAS ? recTotal / hTotal : null;
+    const maxVh = Math.max(...lista.map((x) => x.vh || 0), 1);
+    lista.sort((a, b) => (b.vh ?? -1) - (a.vh ?? -1) || b.total - a.total || b.seg - a.seg);
+    const comHoras = lista.filter((x) => x.seg >= 60);
+    const semHoras = lista.filter((x) => x.seg < 60 && x.total);
+
+    const nomeCli = (id) => (id === '_sem' ? 'Sem cliente' : cliNome(id) || 'Cliente apagado');
+    const row = (x) => {
+      const sub = [
+        x.seg >= 60 ? U.fmtDur(x.seg) : 'sem tempo marcado',
+        x.total ? `${brl(x.total)}${x.aRec ? ` (${brl(x.aRec)} a receber)` : ''}` : x.id === '_sem' ? '' : 'nada recebido',
+      ].filter(Boolean);
+      const val = x.vh != null ? `${brlCurto(x.vh)}<small>/h</small>` : '—';
+      const corpo = `<span class="fin-hora-top"><span class="grow">${esc(nomeCli(x.id))}</span><strong class="${x.vh === 0 ? 'neg' : ''}">${val}</strong></span>
+        <span class="bar"><span style="width:${x.vh ? Math.max(2, Math.round((x.vh * 100) / maxVh)) : 0}%"></span></span>
+        <span class="muted sm">${esc(sub.join(' · '))}</span>`;
+      return x.id === '_sem'
+        ? `<li><div class="fin-hora-row">${corpo}</div></li>`
+        : `<li><button type="button" class="fin-hora-row" data-action="fin-hora-cli" data-cli="${x.id}" title="Ver as receitas deste cliente">${corpo}</button></li>`;
+    };
+
+    return `${chips}
+    <div class="fin-grid">
+      <section class="card fin-saldo">
+        <p class="muted sm">Sua hora em ${esc(nomePer)}</p>
+        <p class="fin-big">${media != null ? `${brl(media)}<small class="muted">/h</small>` : '—'}</p>
+        <p class="muted sm">${brl(recTotal)} de clientes em <strong>${U.fmtDur(segTrabalho)}</strong> de trabalho no cronômetro.${semTempo ? ` Fora da conta: ${brl(semTempo)} de clientes sem tempo marcado.` : ''}</p>
+      </section>
+      <section class="card">
+        <h2 class="card-title">${icon('clientes')}Por cliente</h2>
+        ${comHoras.length ? `<ul class="fin-hora">${comHoras.map(row).join('')}</ul>` : `<p class="muted sm">Nenhum tempo de trabalho no cronômetro neste período.</p>`}
+        ${
+          semHoras.length
+            ? `<details class="fin-cats"><summary>Sem tempo marcado (${semHoras.length}) · ${brl(semTempo)}</summary><ul class="fin-hora">${semHoras.map(row).join('')}</ul></details>`
+            : ''
+        }
+        <p class="muted sm">Conta as entradas do cliente com data no período (recebidas e a receber) divididas pelas horas do cronômetro nas tarefas dele. Quando o pagamento cai num mês e o trabalho foi em outro, o mês sozinho distorce: veja em 3 meses.</p>
+      </section>
     </div>`;
   }
 
@@ -1091,6 +1199,21 @@ export function createFin(ctx) {
     'fin-dia': ({ date }) => {
       S.finDia = S.finDia === date ? null : date;
       render();
+    },
+    'fin-hora-per': ({ per }) => {
+      S.finHoraPer = per;
+      render();
+    },
+    // Abre as receitas do cliente no mesmo período da tela "Por hora".
+    'fin-hora-cli': ({ cli }) => {
+      const n = PER_HORA.find((p) => p[0] === S.finHoraPer)?.[2] || 1;
+      S.finF.receitas = {
+        ...S.finF.receitas, cli, q: '', cat: '',
+        ...(n === 1 ? { per: 'mes' } : { per: 'intervalo', de: `${U.addMonths(S.finMes, 1 - n)}-01`, ate: fimDoMes(S.finMes) }),
+      };
+      S.finTab = 'receitas';
+      render();
+      scrollTo(0, 0);
     },
     'fin-limpa': ({ kind }) => {
       S.finF[kind] = { per: 'mes', de: '', ate: '', cli: '', cat: '', onde: '', q: '' };

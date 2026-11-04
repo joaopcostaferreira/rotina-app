@@ -3469,6 +3469,7 @@ const ACTIONS = {
 // Finanças (js/financas.js): ações e formulários próprios.
 const FIN = createFin({
   S, db, U, esc, icon, openModal, closeModal, toast, persist, render, ask, modalHead, modalFoot, isAtivo, norm, workCatId,
+  ensureRange, elapsed, visible,
 });
 Object.assign(ACTIONS, FIN.ACTIONS);
 Object.assign(FORMS, FIN.FORMS);
