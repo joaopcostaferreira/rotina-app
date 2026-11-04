@@ -1,12 +1,13 @@
 // Service worker: permite instalar o app e abrir sem internet.
 // Estratégia "rede primeiro": sempre busca a versão nova e usa o cache só se estiver offline.
 
-const CACHE = 'rotina-v5';
+const CACHE = 'rotina-v6';
 const SHELL = [
   './',
   './index.html',
   './css/styles.css',
   './js/app.js',
+  './js/financas.js',
   './js/store.js',
   './js/utils.js',
   './js/icons.js',
