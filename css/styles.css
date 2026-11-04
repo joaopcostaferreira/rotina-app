@@ -4280,3 +4280,28 @@ dialog[open] {
   .fin-day-v { font-size: 10px; }
   .tabbar .nav-link { font-size: 10px; }
 }
+
+/* Finanças › Por hora */
+.fin-hora-chips { margin-bottom: 14px; }
+.fin-big small { font-size: 0.5em; font-weight: 600; margin-left: 2px; }
+.fin-hora { list-style: none; margin: 0 0 10px; padding: 0; }
+.fin-hora li + li { border-top: 1px solid var(--border); }
+.fin-hora-row {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+button.fin-hora-row { cursor: pointer; }
+button.fin-hora-row:hover .grow { text-decoration: underline; }
+.fin-hora-top { display: flex; align-items: baseline; gap: 10px; }
+.fin-hora-top .grow { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-hora-top strong { font-variant-numeric: tabular-nums; }
+.fin-hora-top strong small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.fin-hora .bar { flex: none; height: 6px; }
+.fin-hora .bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--pos, var(--accent)); }
