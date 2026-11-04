@@ -1,4 +1,4 @@
-// Envia os avisos do app Rotina para os aparelhos de cada pessoa.
+// Envia os avisos do app Segundo Cérebro (antigo Rotina) para os aparelhos de cada pessoa.
 // Roda no GitHub Actions a cada ~5 minutos (.github/workflows/notificacoes.yml).
 //
 // Para cada usuário com aparelhos cadastrados (users/{uid}/devices):
@@ -75,6 +75,16 @@ const fusoValido = (fuso) => {
   }
 };
 
+// Rotina semanal (dias da semana) ou mensal (todo dia N; em mês mais curto, no último dia).
+function repeteNoDia(r, data, diaSemana) {
+  if (r.repete === 'mes') {
+    const [y, m, d] = data.split('-').map(Number);
+    const ultimo = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return d === Math.min(r.diaDoMes || 1, ultimo);
+  }
+  return (r.diasDaSemana || []).includes(diaSemana);
+}
+
 // Mesma regra do app (js/app.js): tarefas já geradas do dia + as da rotina que ainda não foram geradas.
 function tarefasDoDia(recorrentes, doDia, data, diaSemana) {
   const jaGeradas = new Set(doDia.map((t) => t.recurringTaskId).filter(Boolean));
@@ -82,7 +92,7 @@ function tarefasDoDia(recorrentes, doDia, data, diaSemana) {
     .filter(
       (r) =>
         r.ativo !== false &&
-        (r.diasDaSemana || []).includes(diaSemana) &&
+        repeteNoDia(r, data, diaSemana) &&
         (!r.inicio || data >= r.inicio) &&
         !jaGeradas.has(r.id),
     )
