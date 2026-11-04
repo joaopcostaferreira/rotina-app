@@ -12,6 +12,7 @@ import {
 } from './store.js';
 import * as U from './utils.js';
 import { icon, LOGO, GOOGLE } from './icons.js';
+import { createFin } from './financas.js';
 
 const { esc } = U;
 
@@ -80,13 +81,17 @@ const NAV = [
   { id: 'diario', label: 'Diário' },
   { id: 'rotina', label: 'Rotina' },
   { id: 'clientes', label: 'Clientes' },
+  { id: 'financas', label: 'Finanças', fin: true },
   { id: 'relatorios', label: 'Relatórios' },
   { id: 'categorias', label: 'Categorias' },
   { id: 'ajustes', label: 'Ajustes' },
   { id: 'acessos', label: 'Acessos', admin: true },
 ];
-const TABS = ['hoje', 'calendario', 'painel', 'diario'];
-const navItems = () => NAV.filter((n) => !n.admin || S.isAdmin);
+// Finanças: só para o dono do app (administrador) e no modo demonstração.
+const finOK = () => isDemo || S.isAdmin;
+const TABS_BASE = ['hoje', 'calendario', 'painel', 'diario'];
+let TABS = TABS_BASE;
+const navItems = () => NAV.filter((n) => (!n.admin || S.isAdmin) && (!n.fin || finOK()));
 const navLabel = (id) => NAV.find((n) => n.id === id)?.label || '';
 
 // ---------------------------------------------------------------------------
@@ -335,6 +340,7 @@ function findTask(id, date) {
 // ---------------------------------------------------------------------------
 
 function resetState() {
+  FIN.reset();
   Object.assign(S, {
     profile: { ...DEFAULT_PROFILE },
     categories: [],
@@ -474,7 +480,10 @@ function render() {
     root.innerHTML = '<div class="splash">' + LOGO + '</div>';
     return;
   }
-  if (!$('.app', root)) root.innerHTML = shellHTML();
+  if (!$('.app', root)) {
+    TABS = finOK() ? ['hoje', 'calendario', 'painel', 'financas', 'diario'] : TABS_BASE;
+    root.innerHTML = shellHTML();
+  }
 
   const r = currentRoute();
   document.querySelectorAll('[data-nav]').forEach((a) => {
@@ -2359,6 +2368,7 @@ async function exportData() {
       .filter((t) => t.origem !== 'fixa' && !t.removido)
       .sort((a, b) => a.data.localeCompare(b.data))
       .map((t) => limpa({ titulo: t.titulo, data: t.data, categoria: catNome(t.categoriaId), cliente: cliNome(t.clienteId), item: itemOf(t)?.nome, servico: t.servico, horario: t.horario, duracao: t.duracao, notas: t.notas, concluido: t.concluido || undefined })),
+    financas: finOK() ? await FIN.backup() : undefined,
     diario: diario.filter((j) => j.texto?.trim()).sort((a, b) => a.id.localeCompare(b.id)).map((j) => ({ data: j.id, texto: j.texto })),
     historico: tarefas
       .filter((t) => !t.removido && (t.concluido || t.tempoGasto || t.notas?.trim() || t.sessoes?.length))
@@ -2400,6 +2410,15 @@ function importCard() {
 
 async function startImport(content) {
   try {
+    // Arquivo de finanças (histórico do Notion): vai para a aba Finanças.
+    let json = null;
+    try {
+      json = typeof content === 'string' ? JSON.parse(content) : content;
+    } catch {}
+    if (json?.formato === 'financas-import') {
+      if (!finOK()) return toast('As finanças não estão liberadas nesta conta.');
+      return await FIN.importar(json);
+    }
     openImportPreview(await planImport(content));
   } catch (err) {
     console.error(err);
@@ -2645,6 +2664,7 @@ const VIEWS = {
   ajustes: viewAjustes,
   acessos: viewAcessos,
   diario: viewDiario,
+  financas: () => FIN.view(),
 };
 
 // ---------------------------------------------------------------------------
@@ -2695,14 +2715,30 @@ function catClientFieldsBase(catId, cliId) {
 }
 
 const durLabel = (d) => (d < 60 ? `${d} min` : `${Math.floor(d / 60)}h${d % 60 ? ` ${d % 60}min` : ''}`);
-// Com "aberto": opção "Sem hora de fim" (ex.: igreja às 19h, termina quando termina).
-const duracaoSelect = (val, aberto = false) => {
-  const sel = val || S.profile.duracaoPadrao;
-  const lista = DURACOES.includes(sel) || sel === 'aberto' ? DURACOES : [...DURACOES, sel].sort((a, b) => a - b);
-  return `<select name="duracao">${lista.map((d) => `<option value="${d}" ${d === sel ? 'selected' : ''}>${durLabel(d)}</option>`).join('')}${
-    aberto ? `<option value="aberto" ${sel === 'aberto' ? 'selected' : ''}>Sem hora de fim</option>` : ''
-  }</select>`;
-};
+
+// Hora que termina (no lugar de escolher a duração). A duração aparece embaixo, calculada.
+const fimDe = (t) => (t.horario && !t.fimAberto ? U.fromMin(U.toMin(t.horario) + (t.duracao || S.profile.duracaoPadrao || 30)) : '');
+const fimField = (t) =>
+  `<label class="field"><span>Termina</span><input type="time" name="fim" value="${fimDe(t)}" data-fim ${t.fimAberto ? 'disabled' : ''}></label>`;
+const durInfo = (t) =>
+  `<p class="hint dur-info" data-dur-info>${durTexto(t.fimAberto ? null : t.duracao || (t.horario ? S.profile.duracaoPadrao || 30 : null), t.fimAberto)}</p>`;
+function durTexto(min, aberto) {
+  if (aberto) return 'Sem hora de fim: termina quando terminar.';
+  return min ? `Duração: <b>${durLabel(min)}</b>` : 'Coloque a hora que começa e a que termina.';
+}
+// Minutos entre o começo e o fim do formulário (passa da meia-noite se o fim for menor).
+function durDoForm(form) {
+  const ini = U.toMin(form.elements.horario?.value);
+  let fim = U.toMin(form.elements.fim?.value);
+  if (ini == null || fim == null) return null;
+  if (fim <= ini) fim += 1440;
+  return fim - ini;
+}
+function atualizaDur(form) {
+  const info = form.querySelector('[data-dur-info]');
+  const aberto = !!form.elements.semFim?.checked;
+  if (info) info.innerHTML = durTexto(aberto ? null : durDoForm(form), aberto);
+}
 
 // "Avisar antes" de uma tarefa. Só faz sentido com horário (na lista do dia ele é opcional).
 function avisoFields(t) {
@@ -2723,7 +2759,7 @@ function openDailyForm(t) {
   const editing = !!t.id;
   const fixa = editing && t.origem === 'fixa';
   const catId = t.categoriaId || (t.clienteId ? workCatId() : '') || defaultCat(false);
-  openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}">
+  openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}" data-dur="${t.duracao || ''}">
     ${modalHead(editing ? 'Editar tarefa' : 'Nova tarefa')}
     ${fixa ? '<p class="note">Esta tarefa veio da rotina. Mudanças aqui valem só para este dia.</p>' : ''}
     <label class="field"><span>Título</span>
@@ -2738,7 +2774,8 @@ function openDailyForm(t) {
       <label class="field"><span>Horário <em>opcional</em></span><input type="time" name="horario" value="${t.horario || ''}" data-horario></label>
     </div>
     <div data-aviso-group ${t.horario ? '' : 'hidden'}>
-      <label class="field"><span>Duração na agenda</span>${duracaoSelect(t.duracao)}</label>
+      ${fimField(t)}
+      ${durInfo(t)}
       ${avisoFields(t)}
     </div>
     ${
@@ -2773,7 +2810,7 @@ function openRecForm(r) {
   const dias = r.diasDaSemana || [1, 2, 3, 4, 5];
   const catId = r.categoriaId || defaultCat(!!r.clienteId);
   const mensal = isMensal(r);
-  openModal(`<form class="modal-body" data-form="rec" data-id="${r.id || ''}">
+  openModal(`<form class="modal-body" data-form="rec" data-id="${r.id || ''}" data-dur="${r.duracao || ''}">
     ${modalHead(editing ? 'Editar tarefa fixa' : 'Nova tarefa fixa')}
     <label class="field"><span>Título</span>
       <input name="titulo" required maxlength="120" autocomplete="off" value="${esc(r.titulo || '')}" autofocus></label>
@@ -2800,9 +2837,12 @@ function openRecForm(r) {
       </div>
     </fieldset>
     <div class="row2">
-      <label class="field"><span>Horário</span><input type="time" name="horario" required value="${r.horario || ''}"></label>
-      <label class="field"><span>Duração</span>${duracaoSelect(r.fimAberto ? 'aberto' : r.duracao, true)}</label>
+      <label class="field"><span>Começa</span><input type="time" name="horario" required value="${r.horario || ''}" data-horario></label>
+      ${fimField(r)}
     </div>
+    ${durInfo(r)}
+    <label class="switch-row sem-fim"><input type="checkbox" name="semFim" data-sem-fim ${r.fimAberto ? 'checked' : ''}><span class="switch" aria-hidden="true"></span>
+      <span>Sem hora de fim <small class="muted">(ex.: igreja, termina quando termina)</small></span></label>
     ${avisoFields(r)}
     <p class="hint">O horário organiza a agenda do dia e os avisos. Você pode concluir a tarefa a qualquer hora do dia.</p>
     ${modalFoot(editing ? 'delete-rec' : '', r.id)}
@@ -2922,7 +2962,7 @@ const FORMS = {
       servico: cli ? f.titulo.trim() : null,
       pessoa: (cli?.pedeNome && f.pessoa?.trim()) || null,
       horario: f.horario || null,
-      duracao: Number(f.duracao) || null,
+      duracao: (f.horario && durDoForm(form)) || null,
       ...avisoData(f),
     };
     if (!patch.titulo) return;
@@ -2966,14 +3006,14 @@ const FORMS = {
     const diaDoMes = Math.min(31, Math.max(1, Math.round(Number(f.diaDoMes) || 0)));
     if (mensal && !Number(f.diaDoMes)) return toast('Escolha o dia do mês.');
     if (!mensal && !dias.length) return toast('Escolha pelo menos um dia da semana.');
-    const aberto = f.duracao === 'aberto';
+    const aberto = f.semFim === 'on';
     const data = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
       clienteId: (isWork(f.categoriaId) && f.clienteId) || null,
       itemId: (itensOf(catById(f.categoriaId)).length && f.itemId) || null,
       horario: f.horario || null,
-      duracao: aberto ? null : Number(f.duracao) || null,
+      duracao: aberto ? null : durDoForm(form),
       fimAberto: aberto,
       ...avisoData(f),
       repete: mensal ? 'mes' : 'semana',
@@ -3426,6 +3466,13 @@ const ACTIONS = {
   },
 };
 
+// Finanças (js/financas.js): ações e formulários próprios.
+const FIN = createFin({
+  S, db, U, esc, icon, openModal, closeModal, toast, persist, render, ask, modalHead, modalFoot, isAtivo, norm, workCatId,
+});
+Object.assign(ACTIONS, FIN.ACTIONS);
+Object.assign(FORMS, FIN.FORMS);
+
 // ---------------------------------------------------------------------------
 // Eventos globais
 // ---------------------------------------------------------------------------
@@ -3462,6 +3509,7 @@ document.addEventListener('submit', async (e) => {
 
 document.addEventListener('change', (e) => {
   const t = e.target;
+  if (FIN.onChange(t)) return;
   if (t.matches('[data-import-file]')) {
     const file = t.files?.[0];
     t.value = '';
@@ -3480,6 +3528,9 @@ document.addEventListener('change', (e) => {
     servicosList(t.form);
   } else if (t.matches('select[name="clienteId"]')) {
     servicosList(t.form);
+  } else if (t.matches('[data-sem-fim]')) {
+    t.form.elements.fim.disabled = t.checked;
+    atualizaDur(t.form);
   } else if (t.matches('[data-repete]')) {
     const mes = t.value === 'mes';
     t.form.querySelector('[data-rep-mes]').hidden = !mes;
@@ -3496,9 +3547,19 @@ document.addEventListener('change', (e) => {
 // Na lista do dia, duração e aviso só aparecem quando a tarefa tem horário.
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (FIN.onInput(el)) return;
   if (el.matches('[data-horario]')) {
-    const group = el.form.querySelector('[data-aviso-group]');
+    const form = el.form;
+    const group = form.querySelector('[data-aviso-group]');
     if (group) group.hidden = !el.value;
+    // Mudou o começo: o fim anda junto, mantendo a duração que já estava.
+    const fim = form.elements.fim;
+    const dur = Number(form.dataset.dur) || (fim?.value ? null : S.profile.duracaoPadrao || 30);
+    if (fim && el.value && dur) fim.value = U.fromMin(U.toMin(el.value) + dur);
+    atualizaDur(form);
+  } else if (el.matches('[data-fim]')) {
+    el.form.dataset.dur = durDoForm(el.form) || '';
+    atualizaDur(el.form);
   } else if (el.matches('[data-notes]')) {
     // Notas da tarefa: guarda na memória na hora e salva quando a pessoa para de digitar.
     const t = findTask(el.dataset.id, el.dataset.date);
