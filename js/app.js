@@ -2903,6 +2903,79 @@ function openCatForm(c) {
   </form>`);
 }
 
+// ---------------------------------------------------------------------------
+// Encaixe: tarefa nova num horário já ocupado (ex.: cortar o cabelo no meio do Trabalho).
+// As outras tarefas daquele dia se ajustam; a rotina dos outros dias fica igual.
+// ---------------------------------------------------------------------------
+
+const faixa = (ini, fim) => `${U.fromMin(ini)}–${U.fromMin(fim)}`;
+
+function planoEncaixe(nova, dia) {
+  const s = U.toMin(nova.horario);
+  if (s == null || !nova.duracao) return [];
+  const e = s + nova.duracao;
+  const plano = [];
+  for (const o of visible(dia)) {
+    // Concluída, rodando ou sem hora de fim (igreja) não se mexe.
+    if (o.id === nova.id || o.concluido || !o.horario || o.fimAberto || isRunning(o)) continue;
+    const os = U.toMin(o.horario);
+    const oe = os + duracao(o);
+    if (oe <= s || os >= e) continue;
+    if (s <= os && e >= oe) plano.push({ o, tipo: 'tira', txt: `${o.titulo} (${faixa(os, oe)}) sai deste dia` });
+    else if (s <= os) plano.push({ o, tipo: 'muda', ini: e, fim: oe, txt: `${o.titulo} passa para ${faixa(e, oe)}` });
+    else if (e >= oe) plano.push({ o, tipo: 'muda', ini: os, fim: s, txt: `${o.titulo} passa para ${faixa(os, s)}` });
+    else plano.push({ o, tipo: 'divide', ini: os, fim: s, ini2: e, fim2: oe, txt: `${o.titulo} fica ${faixa(os, s)} e ${faixa(e, oe)}` });
+  }
+  return plano;
+}
+
+function perguntaEncaixe(nova, plano) {
+  const s = U.toMin(nova.horario);
+  return new Promise((resolve) => {
+    openModal(`<div class="modal-body confirm">
+      <p><b>${esc(nova.titulo)}</b> (${faixa(s, s + nova.duracao)}) cai no horário de outra tarefa. Ajustar só neste dia?</p>
+      <ul class="encaixe-lista">${plano.map((p) => `<li>${esc(p.txt)}</li>`).join('')}</ul>
+      <p class="hint">A rotina dos outros dias continua igual.</p>
+      <footer class="modal-actions"><span class="grow"></span>
+        <button type="button" class="btn ghost" data-action="ask-no">Deixar como está</button>
+        <button type="button" class="btn primary" data-action="ask-yes" autofocus>Ajustar</button>
+      </footer></div>`);
+    askResolver = resolve;
+  });
+}
+
+function aplicaEncaixe(plano, date) {
+  const ops = [];
+  for (const p of plano) {
+    const o = p.o;
+    if (p.tipo === 'tira') {
+      if (o.origem === 'fixa') {
+        o.removido = true;
+        ops.push({ type: 'update', col: 'dailyTasks', id: o.id, data: { removido: true } });
+      } else {
+        S.days[date] = S.days[date].filter((x) => x !== o);
+        ops.push({ type: 'delete', col: 'dailyTasks', id: o.id });
+      }
+      continue;
+    }
+    // "ajustado": se a rotina for editada depois, o horário deste dia não volta ao da rotina.
+    const patch = { horario: U.fromMin(p.ini), duracao: p.fim - p.ini, ajustado: true };
+    Object.assign(o, patch);
+    ops.push({ type: 'update', col: 'dailyTasks', id: o.id, data: patch });
+    if (p.tipo === 'divide') {
+      const c = {
+        id: U.newId(), titulo: o.titulo, categoriaId: o.categoriaId || null, clienteId: o.clienteId || null, itemId: o.itemId || null,
+        servico: o.servico || null, pessoa: o.pessoa || null, aviso: o.aviso ?? null, avisoAntes: o.avisoAntes ?? null,
+        data: date, horario: U.fromMin(p.ini2), duracao: p.fim2 - p.ini2, fimAberto: false,
+        concluido: false, origem: 'avulsa', recurringTaskId: null, removido: false, ajustado: true,
+      };
+      S.days[date].push(c);
+      ops.push({ type: 'set', col: 'dailyTasks', id: c.id, data: c });
+    }
+  }
+  persist(db.batch(ops));
+}
+
 const formData = (form) => Object.fromEntries(new FormData(form));
 // Texto "um por linha" → lista sem vazios nem repetidos.
 const linhas = (txt) => {
@@ -2950,9 +3023,13 @@ const FORMS = {
     return startTask({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
   },
 
-  daily(form) {
+  async daily(form) {
     const f = formData(form);
     const id = form.dataset.id;
+    let salva = null; // a tarefa como ficou, para conferir o encaixe
+    let mudouHora = !id;
+    if (form.dataset.salvando) return; // evita salvar duas vezes enquanto confere o dia
+    form.dataset.salvando = '1';
     const cli = isWork(f.categoriaId) ? cliById(f.clienteId) : null;
     const patch = {
       titulo: f.titulo.trim(),
@@ -2983,6 +3060,8 @@ const FORMS = {
         if (t && isRunning(t)) patch.cronometroInicio = Date.now();
       }
       if (t) {
+        mudouHora = t.horario !== patch.horario || (t.duracao || null) !== patch.duracao || newDate !== oldDate;
+        if (mudouHora && t.origem === 'fixa') patch.ajustado = true;
         Object.assign(t, patch);
         if (newDate !== oldDate) {
           S.days[oldDate] = S.days[oldDate].filter((x) => x !== t);
@@ -2990,13 +3069,29 @@ const FORMS = {
         }
       }
       persist(db.update('dailyTasks', id, patch));
+      salva = t ? t : { ...patch, id };
     } else {
       const t = { id: U.newId(), ...patch, data: f.data, concluido: false, origem: 'avulsa', recurringTaskId: null, removido: false };
       S.days[t.data]?.push(t);
       persist(db.set('dailyTasks', t.id, t));
+      salva = t;
+    }
+    render();
+    // Caiu em cima de outra tarefa? Pergunta se ajusta as outras só neste dia.
+    if (mudouHora && salva.horario && salva.duracao) {
+      const date = salva.data;
+      const dia = await ensureDay(date).catch(() => null);
+      if (dia && !dia.some((x) => x.id === salva.id)) dia.push(salva);
+      const plano = dia ? planoEncaixe(salva, dia) : [];
+      if (plano.length && (await perguntaEncaixe(salva, plano))) {
+        aplicaEncaixe(plano, date);
+        toast('Horários do dia ajustados.');
+      }
+      if (!plano.length) closeModal();
+      render();
+      return;
     }
     closeModal();
-    render();
   },
 
   async rec(form) {
@@ -3035,7 +3130,11 @@ const FORMS = {
       for (const t of inst) {
         if (t.data < today || t.concluido) continue;
         if (!repeatsOn(data, t.data)) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
-        else ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: fields });
+        else if (t.ajustado) {
+          // Dia com horário ajustado à mão (encaixe): mantém o horário daquele dia.
+          const { horario, duracao: _dur, fimAberto, ...resto } = fields;
+          ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: resto });
+        } else ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: fields });
       }
       persist(db.batch(ops));
     } else {
