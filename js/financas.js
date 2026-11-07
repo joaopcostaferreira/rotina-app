@@ -23,6 +23,7 @@ const GRUPOS = [
 const CORES = ['#8b5cf6', '#0ea5e9', '#14b8a6', '#22c55e', '#eab308', '#f97316', '#ef4444', '#ec4899', '#06b6d4', '#64748b'];
 const TABS = [
   ['resumo', 'Resumo'],
+  ['extrato', 'Extrato'],
   ['receitas', 'Receitas'],
   ['despesas', 'Despesas'],
   ['contas', 'Contas'],
@@ -44,6 +45,7 @@ export function createFin(ctx) {
   S.finSemana = null; // segunda-feira da semana aberta no calendário de gastos
   S.finDia = null;
   S.finHoraPer = 'mes';
+  S.finExt = { tipo: '', onde: '', n: 60 }; // Extrato: filtros e quantos itens mostrar
   S.finF = {
     receitas: { per: 'mes', de: '', ate: '', cli: '', cat: '', q: '' },
     despesas: { per: 'mes', de: '', ate: '', cat: '', onde: '', q: '' },
@@ -167,7 +169,7 @@ export function createFin(ctx) {
       const o = on.getBoundingClientRect();
       if (o.right > n.right || o.left < n.left) nav.scrollLeft += o.left - n.left - (n.width - o.width) / 2;
     });
-    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML }[S.finTab] || resumoHTML;
+    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML, extrato: extratoHTML }[S.finTab] || resumoHTML;
     return `
     <header class="page-head fin-head">
       <div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div>
@@ -202,7 +204,10 @@ export function createFin(ctx) {
 
   // Linha de um lançamento, no estilo de lista do Notion.
   function txRow(t, { data = true } = {}) {
-    const meta = [data ? diaMes(t.data) : '', catFin(t.catId)?.nome, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
+    // No cartão a "data" é o vencimento da fatura; o dia da compra aparece à parte.
+    const quando = t.cartaoId ? (t.dataCompra ? `compra ${diaMes(t.dataCompra)}` : '') : data ? diaMes(t.data) : '';
+    const fat = t.cartaoId && data ? `fatura ${mesCurto(t.data.slice(0, 7))}` : '';
+    const meta = [quando, fat, catFin(t.catId)?.nome, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
       .filter(Boolean)
       .map(esc)
       .join(' · ');
@@ -270,18 +275,28 @@ export function createFin(ctx) {
       ${Math.abs(prev - real) > 0.004 ? `<small class="muted">previsto ${p}</small>` : '<small class="muted">&nbsp;</small>'}</div>`;
   }
 
-  // Saldo por categoria: guardado num "ver mais".
+  // Saldo por categoria: abre numa janela, para não empurrar os cartões para baixo.
   function categoriasDoMes(sai, ent) {
+    if (!sai.length && !ent.length) return '';
+    return `<button type="button" class="fin-cats-btn" data-action="fin-cats-mes">${icon('right')}Por categoria</button>`;
+  }
+  function openCatsMes() {
+    const mes = doMes(S.finMes).filter((t) => t.contaId || t.cartaoId);
     const por = new Map();
-    for (const t of [...sai, ...ent]) {
-      const k = (t.catId && catFin(t.catId)?.nome) || 'Sem categoria';
+    for (const t of mes) {
+      const k = (t.catId && catFin(t.catId)?.nome) || 'Sem descrição';
       por.set(k, r2((por.get(k) || 0) + sinal(t) * t.valor));
     }
-    if (!por.size) return '';
-    const linhas = [...por.entries()].sort((a, b) => a[1] - b[1]);
-    return `<details class="fin-cats"><summary>Por categoria</summary><ul>${linhas
-      .map(([n, v]) => `<li><span>${esc(n)}</span><strong class="${v < 0 ? 'neg' : 'pos'}">${comSinal(v)}</strong></li>`)
-      .join('')}</ul></details>`;
+    const linhas = [...por.entries()].sort((a, b) => b[1] - a[1]);
+    const lista = (arr) => arr.map(([n, v]) => `<li><span>${esc(n)}</span><strong class="${v < 0 ? 'neg' : 'pos'}">${comSinal(v)}</strong></li>`).join('');
+    const ganhos = linhas.filter(([, v]) => v > 0);
+    const gastos = linhas.filter(([, v]) => v <= 0).reverse();
+    openModal(`<div class="modal-body fin-form">
+      ${modalHead(`Por categoria · ${esc(mesCurto(S.finMes))}`)}
+      ${ganhos.length ? `<p class="fin-grupo pos">Ganhos</p><ul class="fin-cats-lista">${lista(ganhos)}</ul>` : ''}
+      ${gastos.length ? `<p class="fin-grupo neg">Gastos</p><ul class="fin-cats-lista">${lista(gastos)}</ul>` : ''}
+      ${linhas.length ? '' : '<p class="muted">Nada neste mês.</p>'}
+    </div>`);
   }
 
   function cartaoCard(k) {
@@ -301,8 +316,9 @@ export function createFin(ctx) {
         <span>Usado ${brl(u)} de ${brl(k.limite || 0)}</span><span>Disponível <strong>${brl((k.limite || 0) - u)}</strong></span>
       </div>
       <div class="btn-row">
+        <button type="button" class="btn soft sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button>
         <button type="button" class="btn ghost sm" data-action="fin-fatura" data-id="${k.id}">${icon('nota')}Ver fatura</button>
-        ${aberta.length ? `<button type="button" class="btn soft sm" data-action="fin-pagar" data-id="${k.id}">${icon('check')}Pagar fatura</button>` : ''}
+        ${aberta.length ? `<button type="button" class="btn ghost sm" data-action="fin-pagar" data-id="${k.id}">${icon('check')}Pagar fatura</button>` : ''}
       </div>
     </div>`;
   }
@@ -382,6 +398,62 @@ export function createFin(ctx) {
       </div>
       <p class="muted sm">Meses futuros mostram o que já está lançado como previsto (parcelas, contas fixas).</p>
     </section>`;
+  }
+
+  // ---------- Extrato: o que foi lançado, do último para o primeiro ----------
+  // Serve para conferir com o app do banco/cartão o que já foi lançado e o que falta.
+
+  function extratoHTML() {
+    const f = S.finExt;
+    // O histórico importado tem o mesmo "criadoEm" para tudo: vai num bloco só, no fim, por data.
+    const lote = new Map();
+    for (const t of F().tx) lote.set(t.criadoEm || 0, (lote.get(t.criadoEm || 0) || 0) + 1);
+    const veioDoNotion = (t) => !!t.importado || !t.criadoEm || lote.get(t.criadoEm) >= 20;
+    const dataOrd = (t) => t.dataCompra || t.data || '';
+    const ts = F()
+      .tx.filter((t) => (!f.tipo || t.tipo === f.tipo) && (!f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`)))
+      .sort((a, b) => {
+        const ia = veioDoNotion(a);
+        const ib = veioDoNotion(b);
+        if (ia !== ib) return ia ? 1 : -1;
+        if (!ia && b.criadoEm !== a.criadoEm) return b.criadoEm - a.criadoEm;
+        return dataOrd(b).localeCompare(dataOrd(a)) || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
+      });
+    const hoje = U.todayStr();
+    const ontem = U.addDays(hoje, -1);
+    const grupoDe = (t) => {
+      if (veioDoNotion(t)) return 'Histórico do Notion (por data)';
+      const d = U.ymd(new Date(t.criadoEm));
+      return d === hoje ? 'Lançado hoje' : d === ontem ? 'Lançado ontem' : `Lançado ${U.fmtDiaCurto(d)}`;
+    };
+    const mostra = ts.slice(0, f.n);
+    let atual = '';
+    const linhas = [];
+    for (const t of mostra) {
+      const g = grupoDe(t);
+      if (g !== atual) {
+        atual = g;
+        linhas.push(`<li class="tx-dia"><span>${esc(g)}</span><span></span></li>`);
+      }
+      linhas.push(txRow(t));
+    }
+    const chip = (v, l) => `<button type="button" class="tab-chip${f.tipo === v ? ' on' : ''}" data-action="fin-ext" data-v="${v}">${l}</button>`;
+    const novosHoje = ts.filter((t) => !veioDoNotion(t) && U.ymd(new Date(t.criadoEm)) === hoje);
+    return `<section class="card fin-filtros">
+      <div class="fin-f-row fin-ext-f">
+        <div class="tab-chips">${chip('', 'Tudo')}${chip('saida', 'Saídas')}${chip('entrada', 'Entradas')}</div>
+        <label class="field"><span>Conta ou cartão</span><select data-fin-ext="onde">${opt('', 'Todos', f.onde)}${F()
+          .contas.map((c) => opt(`c:${c.id}`, c.nome, f.onde))
+          .join('')}${F()
+          .cartoes.map((k) => opt(`k:${k.id}`, k.nome, f.onde))
+          .join('')}</select></label>
+      </div>
+      <p class="muted sm">Em ordem do que você lançou por último, para conferir com o app do banco ou do cartão.${
+        novosHoje.length ? ` Hoje: <strong>${novosHoje.length}</strong> lançamento${novosHoje.length === 1 ? '' : 's'}.` : ''
+      }</p>
+    </section>
+    ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : '<p class="muted fin-nada">Nada lançado ainda.</p>'}
+    ${ts.length > mostra.length ? `<div class="btn-row fin-mais"><button type="button" class="btn ghost" data-action="fin-ext-mais">Mostrar mais (${ts.length - mostra.length})</button></div>` : ''}`;
   }
 
   // ---------- Receitas e despesas ----------
@@ -506,13 +578,9 @@ export function createFin(ctx) {
       <section class="card">
         <header class="fin-sec-head"><h2 class="card-title">${icon('categorias')}Descrições</h2>
           <button type="button" class="btn ghost sm" data-action="fin-new-cat">${icon('plus')}Descrição</button></header>
-        <ul class="fin-contas">${F()
-          .cats.map(
-            (c) => `<li><button type="button" data-action="fin-edit-cat" data-id="${c.id}"><span class="grow">${esc(c.nome)}</span>
-            <small class="chip">${grupoNome(c.grupo)}</small></button></li>`,
-          )
-          .join('')}</ul>
+        ${descricoesHTML(grupoNome)}
       </section>
+      ${clientesHTML()}
       <section class="card">
         <h2 class="card-title">${icon('download')}Notion</h2>
         <p class="muted sm">Baixe os lançamentos novos em planilha (CSV) para juntar ao Notion com “Merge with CSV”.</p>
@@ -522,6 +590,38 @@ export function createFin(ctx) {
         </div>
       </section>
     </div>`;
+  }
+
+  // Descrições: ganhos em cima (verde), gastos embaixo (vermelho).
+  function descricoesHTML(grupoNome) {
+    const ganho = (c) => c.grupo === 'entrada' || c.grupo === 'aporte';
+    const linha = (c) => `<li><button type="button" data-action="fin-edit-cat" data-id="${c.id}"><span class="grow">${esc(c.nome)}</span>
+            <small class="chip">${grupoNome(c.grupo)}</small></button></li>`;
+    const ordem = (a, b) => GRUPOS.findIndex((g) => g[0] === a.grupo) - GRUPOS.findIndex((g) => g[0] === b.grupo) || a.nome.localeCompare(b.nome, 'pt-BR');
+    const ganhos = F().cats.filter(ganho).sort(ordem);
+    const gastos = F().cats.filter((c) => !ganho(c)).sort(ordem);
+    if (!F().cats.length) return '<p class="muted sm">Nenhuma descrição.</p>';
+    return `${ganhos.length ? `<p class="fin-grupo pos">Ganhos</p><ul class="fin-contas fin-desc pos">${ganhos.map(linha).join('')}</ul>` : ''}
+      ${gastos.length ? `<p class="fin-grupo neg">Gastos</p><ul class="fin-contas fin-desc neg">${gastos.map(linha).join('')}</ul>` : ''}`;
+  }
+
+  // Clientes: criar e editar daqui mesmo, com o que entrou de cada um no mês.
+  function clientesHTML() {
+    const rec = new Map();
+    for (const t of doMes(S.finMes)) if (t.tipo === 'entrada' && t.clienteId) rec.set(t.clienteId, r2((rec.get(t.clienteId) || 0) + t.valor));
+    const nome = (a, b) => a.nome.localeCompare(b.nome, 'pt-BR');
+    const ativos = S.clients.filter(isAtivo).sort((a, b) => (rec.get(b.id) || 0) - (rec.get(a.id) || 0) || nome(a, b));
+    const fim = S.clients.filter((c) => !isAtivo(c)).sort(nome);
+    const linha = (c) => `<li><button type="button" data-action="edit-client" data-id="${c.id}"><span class="grow">${esc(c.nome)}${
+      c.soFinanceiro ? ' <small class="chip">Só financeiro</small>' : ''
+    }</span>${rec.get(c.id) ? `<strong class="pos">${brl(rec.get(c.id))}</strong>` : '<small class="muted">—</small>'}</button></li>`;
+    return `<section class="card">
+        <header class="fin-sec-head"><h2 class="card-title">${icon('clientes')}Clientes</h2>
+          <button type="button" class="btn ghost sm" data-action="new-client">${icon('plus')}Cliente</button></header>
+        <p class="muted sm">Valor recebido em ${esc(mesCurto(S.finMes))}. Toque para editar.</p>
+        ${ativos.length ? `<ul class="fin-contas">${ativos.map(linha).join('')}</ul>` : '<p class="muted sm">Nenhum cliente ativo.</p>'}
+        ${fim.length ? `<details class="fin-fim"><summary>Finalizados (${fim.length})</summary><ul class="fin-contas">${fim.map(linha).join('')}</ul></details>` : ''}
+      </section>`;
   }
 
   // ---------- Estimativa de gastos ----------
@@ -725,9 +825,15 @@ export function createFin(ctx) {
         <label class="field"><span>Data</span><input type="date" name="data" value="${t.data || U.todayStr()}"></label>
         <span></span>
       </div>
-      <div class="row2" data-com-cartao ${k ? '' : 'hidden'}>
-        <label class="field"><span>Fatura</span><select name="fatura">${faturaOptions(k || F().cartoes[0], t.data?.slice(0, 7) || (F().cartoes[0] && faturaPadrao(F().cartoes[0])))}</select></label>
-        ${editing ? '<span></span>' : `<label class="field"><span>Parcelas</span><input type="number" name="parcelas" min="1" max="48" step="1" inputmode="numeric" value="1" data-fin-parcelas></label>`}
+      <div data-com-cartao ${k ? '' : 'hidden'}>
+        <div class="row2">
+          <label class="field"><span>Dia da compra</span><input type="date" name="compra" value="${t.dataCompra || (editing ? '' : U.todayStr())}" data-fin-compra></label>
+          <label class="field"><span>Fatura</span><select name="fatura">${(() => {
+            const kk = k || F().cartoes[0];
+            return kk ? faturaOptions(kk, (editing && t.data?.slice(0, 7)) || faturaPadrao(kk, t.dataCompra || U.todayStr())) : '';
+          })()}</select></label>
+        </div>
+        ${editing ? '' : `<div class="row2"><label class="field"><span>Parcelas</span><input type="number" name="parcelas" min="1" max="48" step="1" inputmode="numeric" value="1" data-fin-parcelas></label><span></span></div>`}
       </div>
       <div class="row2">
         <label class="field"><span>Descrição</span><select name="catId" data-fin-cat>${catOptions(t.catId || (!editing && ult?.catId) || '', tipo)}</select></label>
@@ -760,8 +866,9 @@ export function createFin(ctx) {
     form.querySelector('[data-com-cartao]').hidden = !k;
     if (k) {
       const fat = form.elements.fatura;
-      const atual = fat.value || faturaPadrao(k);
-      fat.innerHTML = faturaOptions(k, form.dataset.id ? atual : faturaPadrao(k));
+      const compra = form.elements.compra?.value || U.todayStr();
+      const atual = fat.value || faturaPadrao(k, compra);
+      fat.innerHTML = faturaOptions(k, form.dataset.id ? atual : faturaPadrao(k, compra));
       if (!form.dataset.id) form.elements.realizado.checked = false;
     }
     const n = Number(form.elements.parcelas?.value) || 1;
@@ -800,6 +907,8 @@ export function createFin(ctx) {
       realizado: f.realizado === 'on',
       obs: f.obs?.trim() || null,
     };
+    if (k) base.dataCompra = f.compra || (id ? null : U.todayStr());
+    else if (id) base.dataCompra = null;
     if (!base.nome) return;
     const ops = [];
     if (id) {
@@ -966,12 +1075,37 @@ export function createFin(ctx) {
   }
 
   // Fatura de um cartão no mês aberto.
+  // Filtro por descrição guardado enquanto a fatura do mesmo cartão estiver aberta.
+  let fatFiltro = { id: '', cat: '' };
+  const catDaTx = (t) => t.catId || '-';
+  function faturaLista(k) {
+    const todas = fatura(k, S.finMes);
+    const fat = (fatFiltro.cat ? todas.filter((t) => catDaTx(t) === fatFiltro.cat) : todas).sort(
+      (a, b) => (b.dataCompra || '').localeCompare(a.dataCompra || '') || b.valor - a.valor,
+    );
+    const total = fatFiltro.cat ? `${brl(soma(fat))} <small class="muted">de ${brl(soma(todas))}</small>` : brl(soma(fat));
+    return `<p class="fin-big sm">${total}</p>
+      ${fat.length ? `<ul class="tx-list">${fat.map((t) => txRow(t, { data: false })).join('')}</ul>` : '<p class="muted">Nenhuma compra nesta fatura.</p>'}`;
+  }
   function openFatura(k) {
-    const fat = fatura(k, S.finMes).sort((a, b) => b.valor - a.valor);
+    if (fatFiltro.id !== k.id) fatFiltro = { id: k.id, cat: '' };
+    const todas = fatura(k, S.finMes);
+    const por = new Map();
+    for (const t of todas) por.set(catDaTx(t), r2((por.get(catDaTx(t)) || 0) + t.valor));
+    if (fatFiltro.cat && !por.has(fatFiltro.cat)) fatFiltro.cat = '';
+    const cats = [...por.entries()].sort((a, b) => b[1] - a[1]);
+    const nomeCat = (c) => (c === '-' ? 'Sem descrição' : catFin(c)?.nome || 'Sem descrição');
     openModal(`<div class="modal-body fin-form">
       ${modalHead(`${esc(k.nome)} · ${esc(mesCurto(S.finMes))}`)}
-      <p class="fin-big sm">${brl(soma(fat))}</p>
-      ${fat.length ? `<ul class="tx-list">${fat.map((t) => txRow(t, { data: false })).join('')}</ul>` : '<p class="muted">Nenhuma compra nesta fatura.</p>'}
+      ${
+        cats.length > 1
+          ? `<label class="field"><span>Descrição</span><select data-fin-fat-cat="${k.id}"><option value="">Todas (${todas.length})</option>${cats
+              .map(([c, v]) => `<option value="${c}" ${c === fatFiltro.cat ? 'selected' : ''}>${esc(nomeCat(c))} · ${brl(v)}</option>`)
+              .join('')}</select></label>`
+          : ''
+      }
+      <div data-fat-lista>${faturaLista(k)}</div>
+      <div class="btn-row"><button type="button" class="btn soft sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button></div>
     </div>`);
   }
 
@@ -1133,7 +1267,7 @@ export function createFin(ctx) {
       add('tx', {
         id: U.newId(), nome: t.nome, tipo: t.tipo === 'entrada' ? 'entrada' : 'saida', valor: r2(t.valor), data: t.data, venc: t.venc || null,
         contaId: ref('conta', t.conta), cartaoId: ref('cartao', t.cartao), catId: ref('cat', t.categoria), clienteId: (t.cliente && cliId[t.cliente]) || null,
-        realizado: !!t.realizado, obs: t.obs || null, noNotion: true, criadoEm: agora,
+        realizado: !!t.realizado, obs: t.obs || null, noNotion: true, importado: true, criadoEm: agora,
       });
     }
     for (const t of data.transferencias || []) {
@@ -1247,7 +1381,21 @@ export function createFin(ctx) {
     'fin-edit-estim': ({ id }) => openEstim(achar('estim', id) || {}),
     'fin-fatura': ({ id }) => {
       const k = cartaoById(id);
+      fatFiltro = { id: '', cat: '' };
       if (k) openFatura(k);
+    },
+    'fin-gasto-cartao': ({ id }) => {
+      if (cartaoById(id)) openTx({ tipo: 'saida', cartaoId: id });
+    },
+    'fin-cats-mes': () => openCatsMes(),
+    'fin-ext': ({ v }) => {
+      S.finExt.tipo = v || '';
+      S.finExt.n = 60;
+      render();
+    },
+    'fin-ext-mais': () => {
+      S.finExt.n += 100;
+      render();
     },
     'fin-pagar': async ({ id }) => {
       const k = cartaoById(id);
@@ -1320,6 +1468,26 @@ export function createFin(ctx) {
     if (el.matches('[data-fin-f]')) return el.type !== 'search' && onFiltro(el);
     if (el.matches('[data-fin-tipo], [data-fin-onde], [data-fin-parcelas]')) {
       syncTxForm(el.form);
+      return true;
+    }
+    // Mudou o dia da compra: a fatura sugerida acompanha (só em lançamento novo).
+    if (el.matches('[data-fin-compra]')) {
+      const form = el.form;
+      const k = form.elements.onde.value.startsWith('k:') && cartaoById(form.elements.onde.value.slice(2));
+      if (k && !form.dataset.id && el.value) form.elements.fatura.innerHTML = faturaOptions(k, faturaPadrao(k, el.value));
+      return true;
+    }
+    if (el.matches('[data-fin-fat-cat]')) {
+      const k = cartaoById(el.dataset.finFatCat);
+      fatFiltro = { id: k?.id || '', cat: el.value };
+      const box = document.querySelector('[data-fat-lista]');
+      if (k && box) box.innerHTML = faturaLista(k);
+      return true;
+    }
+    if (el.matches('[data-fin-ext]')) {
+      S.finExt[el.dataset.finExt] = el.value;
+      S.finExt.n = 60;
+      render();
       return true;
     }
     return false;
