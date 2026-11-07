@@ -3997,6 +3997,68 @@ dialog[open] {
   font-size: 14px;
 }
 
+/* Botão "Por categoria" (abre numa janela) */
+.fin-cats-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fin-cats-btn .i { width: 16px; height: 16px; }
+.fin-cats-btn:hover { color: var(--text); }
+.fin-cats-lista {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+.fin-cats-lista li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.fin-grupo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fin-grupo::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.fin-desc.pos .chip { color: var(--pos); }
+.fin-desc.neg .chip { color: var(--neg); }
+.fin-fim { margin-top: 10px; }
+.fin-fim summary {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Extrato */
+.fin-ext-f { align-items: flex-end; }
+.fin-ext-f .tab-chips { flex: 1 1 220px; margin: 0; }
+.fin-mais { justify-content: center; margin-top: 10px; }
+
 .fin-cartao {
   padding: 12px 0;
   border-top: 1px solid var(--border);
