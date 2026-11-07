@@ -410,19 +410,25 @@ export function createFin(ctx) {
     for (const t of F().tx) lote.set(t.criadoEm || 0, (lote.get(t.criadoEm || 0) || 0) + 1);
     const veioDoNotion = (t) => !!t.importado || !t.criadoEm || lote.get(t.criadoEm) >= 20;
     const dataOrd = (t) => t.dataCompra || t.data || '';
+    const hoje = U.todayStr();
+    const ontem = U.addDays(hoje, -1);
+    // Parcelas do Notion que vencem depois do mês que vem vão para o fim, da mais próxima à mais distante.
+    const limite = fimDoMes(U.addMonths(hoje.slice(0, 7), 1));
+    const nivel = (t) => (!veioDoNotion(t) ? 0 : dataOrd(t) <= limite ? 1 : 2);
     const ts = F()
       .tx.filter((t) => (!f.tipo || t.tipo === f.tipo) && (!f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`)))
       .sort((a, b) => {
-        const ia = veioDoNotion(a);
-        const ib = veioDoNotion(b);
-        if (ia !== ib) return ia ? 1 : -1;
-        if (!ia && b.criadoEm !== a.criadoEm) return b.criadoEm - a.criadoEm;
-        return dataOrd(b).localeCompare(dataOrd(a)) || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
+        const na = nivel(a);
+        const nb = nivel(b);
+        if (na !== nb) return na - nb;
+        if (!na && b.criadoEm !== a.criadoEm) return b.criadoEm - a.criadoEm;
+        const d = na === 2 ? dataOrd(a).localeCompare(dataOrd(b)) : dataOrd(b).localeCompare(dataOrd(a));
+        return d || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
       });
-    const hoje = U.todayStr();
-    const ontem = U.addDays(hoje, -1);
     const grupoDe = (t) => {
-      if (veioDoNotion(t)) return 'Histórico do Notion (por data)';
+      const n = nivel(t);
+      if (n === 2) return 'Parcelas futuras';
+      if (n === 1) return 'Histórico do Notion (por data)';
       const d = U.ymd(new Date(t.criadoEm));
       return d === hoje ? 'Lançado hoje' : d === ontem ? 'Lançado ontem' : `Lançado ${U.fmtDiaCurto(d)}`;
     };
