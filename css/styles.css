@@ -4096,8 +4096,10 @@ dialog[open] {
 
 /* Extrato */
 .fin-ext-f { align-items: flex-end; }
-.fin-ext-f .tab-chips { flex: 1 1 220px; margin: 0; }
+.fin-ext-f .tab-chips { flex: 1 1 100%; flex-wrap: wrap; overflow: visible; margin: 0; }
 .fin-mais { justify-content: center; margin-top: 10px; }
+.tab-chip.fut { color: #d97706; border-color: color-mix(in srgb, #f59e0b 45%, transparent); }
+.tab-chip.fut.on { background: #f59e0b; border-color: #f59e0b; color: #1c1206; }
 
 .fin-cartao {
   padding: 12px 0;
