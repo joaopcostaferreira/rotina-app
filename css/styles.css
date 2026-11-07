@@ -303,6 +303,7 @@ code {
 }
 
 .field input:not([type='checkbox']):not([type='radio']):not([type='color']),
+.fin-itens-add input,
 .field select,
 .field textarea {
   width: 100%;
@@ -319,6 +320,7 @@ code {
 }
 
 .field input:focus,
+.fin-itens-add input:focus,
 .field select:focus,
 .field textarea:focus {
   outline: none;
@@ -326,7 +328,8 @@ code {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.field input:disabled {
+.field input:disabled,
+.field input[readonly] {
   opacity: 0.6;
 }
 
@@ -4053,6 +4056,43 @@ dialog[open] {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* Gastos dentro de um lançamento de custo variável */
+.fin-itens {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.fin-itens-tit {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.fin-itens-lista {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.fin-itens-lista li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+.fin-itens-lista li:first-child { border-top: 0; }
+.fin-itens-add {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.fin-itens-add input { min-width: 0; }
+.fin-itens-add input[name="itemNota"],
+.fin-itens-add .btn { grid-column: 1 / -1; }
 
 /* Extrato */
 .fin-ext-f { align-items: flex-end; }
