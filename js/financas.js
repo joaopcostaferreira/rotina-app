@@ -508,11 +508,12 @@ export function createFin(ctx) {
         </button>
         <span class="tx-val">${brl(t.valor)}</span></li>`);
     }
-    return `<section class="card fin-saldo">
-        <p class="muted sm">Transferido em ${esc(mesCurto(S.finMes))}</p>
-        <p class="fin-big">${brl(soma(ts))}</p>
-        <p class="muted sm">${ts.length} transferência${ts.length === 1 ? '' : 's'}. Use as setas do mês lá em cima para ver outros meses.</p>
-        <div class="btn-row"><button type="button" class="btn primary sm" data-action="fin-new-transf">${icon('plus')}Transferir</button></div>
+    return `<section class="card fin-transf-topo">
+        <div class="grow">
+          <p class="muted sm">Transferido em ${esc(mesCurto(S.finMes))} · ${ts.length} transferência${ts.length === 1 ? '' : 's'}</p>
+          <p class="fin-big">${brl(soma(ts))}</p>
+        </div>
+        <button type="button" class="btn primary sm" data-action="fin-new-transf">${icon('plus')}Transferir</button>
       </section>
       ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : '<p class="muted fin-nada">Nenhuma transferência neste mês.</p>'}`;
   }
