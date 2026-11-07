@@ -26,6 +26,7 @@ const TABS = [
   ['extrato', 'Extrato'],
   ['receitas', 'Receitas'],
   ['despesas', 'Despesas'],
+  ['transf', 'Transferências'],
   ['contas', 'Contas'],
   ['estimativa', 'Estimativa'],
   ['hora', 'Por hora'],
@@ -169,7 +170,7 @@ export function createFin(ctx) {
       const o = on.getBoundingClientRect();
       if (o.right > n.right || o.left < n.left) nav.scrollLeft += o.left - n.left - (n.width - o.width) / 2;
     });
-    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML, extrato: extratoHTML }[S.finTab] || resumoHTML;
+    const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML, extrato: extratoHTML, transf: transfHTML }[S.finTab] || resumoHTML;
     return `
     <header class="page-head fin-head">
       <div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div>
@@ -203,12 +204,16 @@ export function createFin(ctx) {
   }
 
   // Linha de um lançamento, no estilo de lista do Notion.
-  function txRow(t, { data = true } = {}) {
+  const horaDe = (ms) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  function txRow(t, { data = true, lancado = 0 } = {}) {
     // No cartão a "data" é o vencimento da fatura; o dia da compra aparece à parte.
     const quando = t.cartaoId ? (t.dataCompra ? `compra ${diaMes(t.dataCompra)}` : '') : data ? diaMes(t.data) : '';
     const fat = t.cartaoId && data ? `fatura ${mesCurto(t.data.slice(0, 7))}` : '';
     const nItens = t.itens?.length > 1 ? `${t.itens.length} gastos` : '';
-    const meta = [quando, fat, catFin(t.catId)?.nome, nItens, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
+    const meta = [lancado ? `lançado ${horaDe(lancado)}` : '', quando, fat, catFin(t.catId)?.nome, nItens, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
       .filter(Boolean)
       .map(esc)
       .join(' · ');
@@ -358,7 +363,7 @@ export function createFin(ctx) {
     </section>`;
   }
 
-  // Fluxo de caixa: 5 meses antes até 6 depois do mês aberto, com o saldo no fim de cada mês.
+  // Balanço mensal: 5 meses antes até 6 depois do mês aberto, com o saldo no fim de cada mês.
   function fluxoHTML() {
     const meses = Array.from({ length: 12 }, (_, i) => U.addMonths(S.finMes, i - 5));
     const comConta = F().tx.filter((t) => t.contaId);
@@ -383,7 +388,7 @@ export function createFin(ctx) {
     });
     const max = Math.max(...linhas.map((l) => Math.max(l.e, l.s)), 1);
     return `<section class="card fin-fluxo">
-      <h2 class="card-title">${icon('rotina')}Fluxo de caixa</h2>
+      <h2 class="card-title">${icon('rotina')}Balanço mensal</h2>
       <div class="fluxo">
         <div class="fluxo-row fluxo-head muted sm"><span>Mês</span><span>Entradas</span><span>Saídas</span><span>Saldo no fim</span></div>
         ${linhas
@@ -414,22 +419,26 @@ export function createFin(ctx) {
     const dataOrd = (t) => t.dataCompra || t.data || '';
     const hoje = U.todayStr();
     const ontem = U.addDays(hoje, -1);
-    // Parcelas do Notion que vencem depois do mês que vem vão para o fim, da mais próxima à mais distante.
-    const limite = fimDoMes(U.addMonths(hoje.slice(0, 7), 1));
-    const nivel = (t) => (!veioDoNotion(t) ? 0 : dataOrd(t) <= limite ? 1 : 2);
+    // Futuras: o que vence depois deste mês (histórico do Notion) e as parcelas 2, 3… do que foi lançado aqui.
+    // Ficam fora da lista normal e aparecem só no botão "Futuras".
+    const limite = fimDoMes(hoje.slice(0, 7));
+    const nivel = (t) => (!veioDoNotion(t) ? (t.parcela > 1 ? 2 : 0) : (t.data || '') <= limite ? 1 : 2);
+    const futuras = f.tipo === 'futuras';
+    const daOnde = (t) => !f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`);
+    const nFut = F().tx.filter((t) => nivel(t) === 2 && daOnde(t)).length;
     const ts = F()
-      .tx.filter((t) => (!f.tipo || t.tipo === f.tipo) && (!f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`)))
+      .tx.filter((t) => daOnde(t) && (futuras ? nivel(t) === 2 : nivel(t) !== 2 && (!f.tipo || t.tipo === f.tipo)))
       .sort((a, b) => {
         const na = nivel(a);
         const nb = nivel(b);
         if (na !== nb) return na - nb;
         if (!na && quandoLancou(b) !== quandoLancou(a)) return quandoLancou(b) - quandoLancou(a);
-        const d = na === 2 ? dataOrd(a).localeCompare(dataOrd(b)) : dataOrd(b).localeCompare(dataOrd(a));
+        const d = na === 2 ? (a.data || '').localeCompare(b.data || '') : dataOrd(b).localeCompare(dataOrd(a));
         return d || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
       });
     const grupoDe = (t) => {
       const n = nivel(t);
-      if (n === 2) return 'Parcelas futuras';
+      if (n === 2) return `Vence em ${U.fmtMes(t.data.slice(0, 7))}`;
       if (n === 1) return 'Histórico do Notion (por data)';
       const d = U.ymd(new Date(quandoLancou(t)));
       return d === hoje ? 'Lançado hoje' : d === ontem ? 'Lançado ontem' : `Lançado ${U.fmtDiaCurto(d)}`;
@@ -443,25 +452,59 @@ export function createFin(ctx) {
         atual = g;
         linhas.push(`<li class="tx-dia"><span>${esc(g)}</span><span></span></li>`);
       }
-      linhas.push(txRow(t));
+      linhas.push(txRow(t, { lancado: nivel(t) === 0 ? quandoLancou(t) : 0 }));
     }
-    const chip = (v, l) => `<button type="button" class="tab-chip${f.tipo === v ? ' on' : ''}" data-action="fin-ext" data-v="${v}">${l}</button>`;
+    const chip = (v, l, cls = '') => `<button type="button" class="tab-chip${cls}${f.tipo === v ? ' on' : ''}" data-action="fin-ext" data-v="${v}">${l}</button>`;
     const novosHoje = ts.filter((t) => !veioDoNotion(t) && U.ymd(new Date(quandoLancou(t))) === hoje);
     return `<section class="card fin-filtros">
       <div class="fin-f-row fin-ext-f">
-        <div class="tab-chips">${chip('', 'Tudo')}${chip('saida', 'Saídas')}${chip('entrada', 'Entradas')}</div>
+        <div class="tab-chips">${chip('', 'Tudo')}${chip('saida', 'Saídas')}${chip('entrada', 'Entradas')}${chip('futuras', `Futuras${nFut ? ` (${nFut})` : ''}`, ' fut')}</div>
         <label class="field"><span>Conta ou cartão</span><select data-fin-ext="onde">${opt('', 'Todos', f.onde)}${F()
           .contas.map((c) => opt(`c:${c.id}`, c.nome, f.onde))
           .join('')}${F()
           .cartoes.map((k) => opt(`k:${k.id}`, k.nome, f.onde))
           .join('')}</select></label>
       </div>
-      <p class="muted sm">Em ordem do que você lançou por último, para conferir com o app do banco ou do cartão.${
-        novosHoje.length ? ` Hoje: <strong>${novosHoje.length}</strong> lançamento${novosHoje.length === 1 ? '' : 's'}.` : ''
+      <p class="muted sm">${
+        futuras
+          ? 'Parcelas e contas que vencem nos próximos meses, da mais próxima à mais distante.'
+          : `O último lançado fica em cima, para conferir com o app do banco ou do cartão.${
+              novosHoje.length ? ` Hoje: <strong>${novosHoje.length}</strong> lançamento${novosHoje.length === 1 ? '' : 's'}.` : ''
+            }`
       }</p>
     </section>
-    ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : '<p class="muted fin-nada">Nada lançado ainda.</p>'}
+    ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : `<p class="muted fin-nada">${futuras ? 'Nada para os próximos meses.' : 'Nada lançado ainda.'}</p>`}
     ${ts.length > mostra.length ? `<div class="btn-row fin-mais"><button type="button" class="btn ghost" data-action="fin-ext-mais">Mostrar mais (${ts.length - mostra.length})</button></div>` : ''}`;
+  }
+
+  // ---------- Transferências do mês: de qual conta para qual, data e valor ----------
+
+  function transfHTML() {
+    const ts = F()
+      .transf.filter((t) => t.data?.startsWith(S.finMes))
+      .sort((a, b) => b.data.localeCompare(a.data) || (b.criadoEm || 0) - (a.criadoEm || 0));
+    const linhas = [];
+    let dia = '';
+    for (const t of ts) {
+      if (t.data !== dia) {
+        dia = t.data;
+        linhas.push(`<li class="tx-dia"><span>${esc(U.fmtDiaCurto(t.data))}</span><span></span></li>`);
+      }
+      linhas.push(`<li class="tx${t.realizado ? '' : ' prev'}">
+        <span class="tx-check on" aria-hidden="true">${icon('transferir')}</span>
+        <button type="button" class="tx-main" data-action="fin-edit-transf" data-id="${t.id}">
+          <span class="tx-nome">${esc(t.nome)}${t.realizado ? '' : ' <small class="chip tx-prev">previsto</small>'}</span>
+          <span class="tx-meta">${diaMes(t.data)} · ${esc(contaById(t.deId)?.nome || '?')} → ${esc(contaById(t.paraId)?.nome || '?')}</span>
+        </button>
+        <span class="tx-val">${brl(t.valor)}</span></li>`);
+    }
+    return `<section class="card fin-saldo">
+        <p class="muted sm">Transferido em ${esc(mesCurto(S.finMes))}</p>
+        <p class="fin-big">${brl(soma(ts))}</p>
+        <p class="muted sm">${ts.length} transferência${ts.length === 1 ? '' : 's'}. Use as setas do mês lá em cima para ver outros meses.</p>
+        <div class="btn-row"><button type="button" class="btn primary sm" data-action="fin-new-transf">${icon('plus')}Transferir</button></div>
+      </section>
+      ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : '<p class="muted fin-nada">Nenhuma transferência neste mês.</p>'}`;
   }
 
   // ---------- Receitas e despesas ----------
@@ -1032,6 +1075,7 @@ export function createFin(ctx) {
     if (!(valor > 0)) return toast('Digite um valor, ex.: 150,00');
     if (!f.deId || !f.paraId || f.deId === f.paraId) return toast('Escolha duas contas diferentes.');
     const data = { nome: f.nome.trim() || 'Transferência', valor, data: f.data || U.todayStr(), deId: f.deId, paraId: f.paraId, realizado: f.realizado === 'on' };
+    if (!form.dataset.id) data.criadoEm = Date.now();
     salvaDoc('transf', form.dataset.id, data);
   }
 
