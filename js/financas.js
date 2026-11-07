@@ -207,7 +207,8 @@ export function createFin(ctx) {
     // No cartão a "data" é o vencimento da fatura; o dia da compra aparece à parte.
     const quando = t.cartaoId ? (t.dataCompra ? `compra ${diaMes(t.dataCompra)}` : '') : data ? diaMes(t.data) : '';
     const fat = t.cartaoId && data ? `fatura ${mesCurto(t.data.slice(0, 7))}` : '';
-    const meta = [quando, fat, catFin(t.catId)?.nome, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
+    const nItens = t.itens?.length > 1 ? `${t.itens.length} gastos` : '';
+    const meta = [quando, fat, catFin(t.catId)?.nome, nItens, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
       .filter(Boolean)
       .map(esc)
       .join(' · ');
@@ -408,7 +409,8 @@ export function createFin(ctx) {
     // O histórico importado tem o mesmo "criadoEm" para tudo: vai num bloco só, no fim, por data.
     const lote = new Map();
     for (const t of F().tx) lote.set(t.criadoEm || 0, (lote.get(t.criadoEm || 0) || 0) + 1);
-    const veioDoNotion = (t) => !!t.importado || !t.criadoEm || lote.get(t.criadoEm) >= 20;
+    const veioDoNotion = (t) => !t.mexidoEm && (!!t.importado || !t.criadoEm || lote.get(t.criadoEm) >= 20);
+    const quandoLancou = (t) => t.mexidoEm || t.criadoEm || 0;
     const dataOrd = (t) => t.dataCompra || t.data || '';
     const hoje = U.todayStr();
     const ontem = U.addDays(hoje, -1);
@@ -421,7 +423,7 @@ export function createFin(ctx) {
         const na = nivel(a);
         const nb = nivel(b);
         if (na !== nb) return na - nb;
-        if (!na && b.criadoEm !== a.criadoEm) return b.criadoEm - a.criadoEm;
+        if (!na && quandoLancou(b) !== quandoLancou(a)) return quandoLancou(b) - quandoLancou(a);
         const d = na === 2 ? dataOrd(a).localeCompare(dataOrd(b)) : dataOrd(b).localeCompare(dataOrd(a));
         return d || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
       });
@@ -429,7 +431,7 @@ export function createFin(ctx) {
       const n = nivel(t);
       if (n === 2) return 'Parcelas futuras';
       if (n === 1) return 'Histórico do Notion (por data)';
-      const d = U.ymd(new Date(t.criadoEm));
+      const d = U.ymd(new Date(quandoLancou(t)));
       return d === hoje ? 'Lançado hoje' : d === ontem ? 'Lançado ontem' : `Lançado ${U.fmtDiaCurto(d)}`;
     };
     const mostra = ts.slice(0, f.n);
@@ -444,7 +446,7 @@ export function createFin(ctx) {
       linhas.push(txRow(t));
     }
     const chip = (v, l) => `<button type="button" class="tab-chip${f.tipo === v ? ' on' : ''}" data-action="fin-ext" data-v="${v}">${l}</button>`;
-    const novosHoje = ts.filter((t) => !veioDoNotion(t) && U.ymd(new Date(t.criadoEm)) === hoje);
+    const novosHoje = ts.filter((t) => !veioDoNotion(t) && U.ymd(new Date(quandoLancou(t))) === hoje);
     return `<section class="card fin-filtros">
       <div class="fin-f-row fin-ext-f">
         <div class="tab-chips">${chip('', 'Tudo')}${chip('saida', 'Saídas')}${chip('entrada', 'Entradas')}</div>
@@ -805,6 +807,60 @@ export function createFin(ctx) {
     }`;
   }
 
+  // Custo variável (ex.: Uber): vários gastos somados num lançamento só.
+  const ehVariavel = (t) => catFin(t.catId)?.grupo === 'variavel';
+  const itensDe = (t) => (t.itens?.length ? t.itens : [{ data: t.dataCompra || t.data, valor: t.valor, nota: '' }]);
+  function itensHTML(t) {
+    const itens = itensDe(t)
+      .map((x, i) => ({ ...x, i }))
+      .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+    return `<p class="fin-itens-tit">Gastos dentro deste lançamento <small class="muted">(${itens.length} · ${brl(t.valor)})</small></p>
+      <ul class="fin-itens-lista">${itens
+        .map(
+          (x) => `<li><span class="muted">${x.data ? diaMes(x.data) : '—'}</span><span class="grow">${esc(x.nota || '')}</span><strong>${brl(x.valor)}</strong>${
+            itens.length > 1 ? `<button type="button" class="icon-btn sm" data-action="fin-item-del" data-i="${x.i}" aria-label="Tirar este gasto">${icon('x')}</button>` : ''
+          }</li>`,
+        )
+        .join('')}</ul>
+      <div class="fin-itens-add">
+        <input type="date" name="itemData" value="${U.todayStr()}" aria-label="Data do gasto">
+        <input name="itemValor" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Valor do gasto">
+        <input name="itemNota" maxlength="80" autocomplete="off" placeholder="Nota (opcional)" aria-label="Nota do gasto">
+        <button type="button" class="btn soft sm" data-action="fin-item-add">${icon('plus')}Adicionar custo</button>
+      </div>`;
+  }
+  // Põe o gasto digitado no lançamento aberto e salva na hora. Devolve false se o valor for inválido.
+  function addItem(form, avisa = true) {
+    const t = F().tx.find((x) => x.id === form.dataset.id);
+    const el = form.elements.itemValor;
+    if (!t || !el) return false;
+    const valor = valorDe(el.value);
+    if (!(valor > 0)) {
+      if (avisa) {
+        el.focus();
+        toast('Digite o valor do gasto, ex.: 23,90');
+      }
+      return false;
+    }
+    const itens = [...itensDe(t), { data: form.elements.itemData.value || U.todayStr(), valor, nota: form.elements.itemNota.value.trim() }];
+    salvaItens(t, itens, form);
+    toast(`Custo de ${brl(valor)} somado. Total: ${brl(t.valor)}.`);
+    return true;
+  }
+  function salvaItens(t, itens, form) {
+    t.itens = itens;
+    t.valor = r2(itens.reduce((s, x) => s + x.valor, 0));
+    t.mexidoEm = Date.now();
+    persist(db.update(COLS.tx, t.id, { itens: t.itens, valor: t.valor, mexidoEm: t.mexidoEm }));
+    if (form) {
+      form.elements.valor.value = valorInput(t.valor);
+      form.elements.valor.readOnly = true;
+      const box = form.querySelector('[data-itens-box]');
+      if (box) box.innerHTML = itensHTML(t);
+    }
+    render();
+  }
+
   function openTx(t) {
     const editing = !!t.id;
     const tipo = t.tipo || 'saida';
@@ -824,7 +880,7 @@ export function createFin(ctx) {
         <datalist id="fin-nomes">${nomes.map((n) => `<option value="${esc(n)}">`).join('')}</datalist></label>
       <div class="row2">
         <label class="field"><span data-valor-label>${t.parcelas > 1 && !editing ? 'Valor de cada parcela' : 'Valor'}</span>
-          <input name="valor" required inputmode="decimal" autocomplete="off" placeholder="0,00" value="${valorInput(t.valor)}"></label>
+          <input name="valor" required inputmode="decimal" autocomplete="off" placeholder="0,00" value="${valorInput(t.valor)}" ${t.itens?.length ? 'readonly title="Soma dos gastos abaixo"' : ''}></label>
         <label class="field"><span>${tipo === 'entrada' ? 'Entrou em' : 'Saiu de'}</span><select name="onde" required data-fin-onde>${ondeOptions(base, tipo)}</select></label>
       </div>
       <div class="row2" data-sem-cartao ${k ? 'hidden' : ''}>
@@ -848,6 +904,7 @@ export function createFin(ctx) {
       <label class="switch-row"><input type="checkbox" name="realizado" ${(editing ? t.realizado : !k && (t.data || U.todayStr()) <= U.todayStr()) ? 'checked' : ''}><span class="switch" aria-hidden="true"></span>
         <span data-real-label>${k ? 'Fatura já paga' : tipo === 'entrada' ? 'Já recebi' : 'Já paguei'}</span></label>
       <label class="field"><span>Observação <em>opcional</em></span><input name="obs" maxlength="300" autocomplete="off" value="${esc(t.obs || '')}"></label>
+      ${editing && tipo === 'saida' && ehVariavel(t) ? `<div class="fin-itens" data-itens-box>${itensHTML(t)}</div>` : ''}
       ${t.grupo && editing ? `<p class="hint">Parcela ${t.parcela} de ${t.parcelas}. Mudanças valem só para esta parcela.</p>` : ''}
       ${modalFoot(editing ? 'fin-del' : '', t.id)}
     </form>`);
@@ -890,9 +947,11 @@ export function createFin(ctx) {
   }
 
   function saveTx(form) {
+    if (form.elements.itemValor?.value.trim() && !addItem(form)) return;
     const f = Object.fromEntries(new FormData(form));
     const id = form.dataset.id;
-    const valor = valorDe(f.valor);
+    const comItens = id && F().tx.find((x) => x.id === id)?.itens?.length;
+    const valor = comItens ? F().tx.find((x) => x.id === id).valor : valorDe(f.valor);
     if (!(valor > 0)) {
       form.elements.valor.focus();
       return toast('Digite um valor, ex.: 150,00');
@@ -1394,6 +1453,19 @@ export function createFin(ctx) {
       if (cartaoById(id)) openTx({ tipo: 'saida', cartaoId: id });
     },
     'fin-cats-mes': () => openCatsMes(),
+    'fin-item-add': () => {
+      const form = document.querySelector('#modal form[data-form="fin-tx"]');
+      if (form) addItem(form);
+    },
+    'fin-item-del': async ({ i }) => {
+      const form = document.querySelector('#modal form[data-form="fin-tx"]');
+      const t = form && F().tx.find((x) => x.id === form.dataset.id);
+      if (!t?.itens?.length) return;
+      const x = t.itens[Number(i)];
+      if (!x) return;
+      salvaItens(t, t.itens.filter((_, j) => j !== Number(i)), form);
+      toast(`Gasto de ${brl(x.valor)} tirado. Total: ${brl(t.valor)}.`);
+    },
     'fin-ext': ({ v }) => {
       S.finExt.tipo = v || '';
       S.finExt.n = 60;
