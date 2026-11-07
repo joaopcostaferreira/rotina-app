@@ -121,7 +121,10 @@ export function createFin(ctx) {
     const fecha = k.fecha || 3;
     const venc = k.venc || 10;
     let mesFecha = Number(hoje.slice(8)) <= fecha ? ym : U.addMonths(ym, 1);
-    return venc > fecha ? mesFecha : U.addMonths(mesFecha, 1);
+    let r = venc > fecha ? mesFecha : U.addMonths(mesFecha, 1);
+    // Fatura já paga não recebe compra nova: vai para a seguinte.
+    for (let i = 0; i < 3 && fatPaga(k, r); i++) r = U.addMonths(r, 1);
+    return r;
   }
 
   // -------------------------------------------------------------------------
@@ -145,6 +148,12 @@ export function createFin(ctx) {
   const doCartao = (id) => F().tx.filter((t) => t.cartaoId === id);
   const usado = (k) => soma(doCartao(k.id).filter((t) => !t.realizado && t.tipo === 'saida'));
   const fatura = (k, ym) => doCartao(k.id).filter((t) => t.data?.startsWith(ym) && t.tipo === 'saida');
+  const fatPaga = (k, ym) => {
+    const f = fatura(k, ym);
+    return f.length > 0 && f.every((t) => t.realizado);
+  };
+  // No mês de hoje, se a fatura do mês já foi paga, o cartão mostra a do mês que vem (a que está em uso).
+  const mesFatura = (k) => (S.finMes === U.todayStr().slice(0, 7) && fatPaga(k, S.finMes) ? U.addMonths(S.finMes, 1) : S.finMes);
   const ondeTxt = (t) => {
     const k = t.cartaoId && cartaoById(t.cartaoId);
     return k ? k.nome : contaById(t.contaId)?.nome || 'Sem conta';
@@ -308,14 +317,15 @@ export function createFin(ctx) {
   function cartaoCard(k) {
     const u = usado(k);
     const pct = k.limite ? Math.min(100, Math.round((u * 100) / k.limite)) : 0;
-    const fat = fatura(k, S.finMes);
+    const ym = mesFatura(k);
+    const fat = fatura(k, ym);
     const valorFat = soma(fat);
     const aberta = fat.filter((t) => !t.realizado);
-    const estado = !fat.length ? 'Sem compras' : aberta.length ? `vence ${String(k.venc || 10).padStart(2, '0')}/${S.finMes.slice(5)}` : 'Paga';
+    const estado = !fat.length ? 'Sem compras' : aberta.length ? `vence ${String(k.venc || 10).padStart(2, '0')}/${ym.slice(5)}` : 'Paga';
     return `<div class="fin-cartao" style="--c:${k.cor || '#8b5cf6'}">
       <div class="fin-cartao-top">
         <button type="button" class="link-plain" data-action="fin-edit-cartao" data-id="${k.id}"><span class="dot"></span><strong>${esc(k.nome)}</strong></button>
-        <span class="muted sm">Fatura de ${esc(mesCurto(S.finMes))}: <strong>${brl(valorFat)}</strong> · ${estado}</span>
+        <span class="muted sm">Fatura de ${esc(mesCurto(ym))}: <strong>${brl(valorFat)}</strong> · ${estado}</span>
       </div>
       <div class="bar" role="img" aria-label="${pct}% do limite usado"><span style="width:${pct}%"></span></div>
       <div class="fin-cartao-foot muted sm">
@@ -323,8 +333,8 @@ export function createFin(ctx) {
       </div>
       <div class="btn-row">
         <button type="button" class="btn soft sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button>
-        <button type="button" class="btn ghost sm" data-action="fin-fatura" data-id="${k.id}">${icon('nota')}Ver fatura</button>
-        ${aberta.length ? `<button type="button" class="btn ghost sm" data-action="fin-pagar" data-id="${k.id}">${icon('check')}Pagar fatura</button>` : ''}
+        <button type="button" class="btn ghost sm" data-action="fin-fatura" data-id="${k.id}" data-mes="${ym}">${icon('nota')}Ver fatura</button>
+        ${aberta.length ? `<button type="button" class="btn ghost sm" data-action="fin-pagar" data-id="${k.id}" data-mes="${ym}">${icon('check')}Pagar fatura</button>` : ''}
       </div>
     </div>`;
   }
@@ -1185,10 +1195,10 @@ export function createFin(ctx) {
 
   // Fatura de um cartão no mês aberto.
   // Filtro por descrição guardado enquanto a fatura do mesmo cartão estiver aberta.
-  let fatFiltro = { id: '', cat: '' };
+  let fatFiltro = { id: '', cat: '', ym: '' };
   const catDaTx = (t) => t.catId || '-';
   function faturaLista(k) {
-    const todas = fatura(k, S.finMes);
+    const todas = fatura(k, fatFiltro.ym || S.finMes);
     const fat = (fatFiltro.cat ? todas.filter((t) => catDaTx(t) === fatFiltro.cat) : todas).sort(
       (a, b) => (b.dataCompra || '').localeCompare(a.dataCompra || '') || b.valor - a.valor,
     );
@@ -1196,16 +1206,19 @@ export function createFin(ctx) {
     return `<p class="fin-big sm">${total}</p>
       ${fat.length ? `<ul class="tx-list">${fat.map((t) => txRow(t, { data: false })).join('')}</ul>` : '<p class="muted">Nenhuma compra nesta fatura.</p>'}`;
   }
-  function openFatura(k) {
-    if (fatFiltro.id !== k.id) fatFiltro = { id: k.id, cat: '' };
-    const todas = fatura(k, S.finMes);
+  function openFatura(k, mes) {
+    if (fatFiltro.id !== k.id) fatFiltro = { id: k.id, cat: '', ym: mes || mesFatura(k) };
+    else if (mes) fatFiltro.ym = mes;
+    const ym = fatFiltro.ym || S.finMes;
+    const todas = fatura(k, ym);
     const por = new Map();
     for (const t of todas) por.set(catDaTx(t), r2((por.get(catDaTx(t)) || 0) + t.valor));
     if (fatFiltro.cat && !por.has(fatFiltro.cat)) fatFiltro.cat = '';
     const cats = [...por.entries()].sort((a, b) => b[1] - a[1]);
     const nomeCat = (c) => (c === '-' ? 'Sem descrição' : catFin(c)?.nome || 'Sem descrição');
     openModal(`<div class="modal-body fin-form">
-      ${modalHead(`${esc(k.nome)} · ${esc(mesCurto(S.finMes))}`)}
+      ${modalHead(`${esc(k.nome)} · ${esc(mesCurto(ym))}`)}
+      <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button></div>
       ${
         cats.length > 1
           ? `<label class="field"><span>Descrição</span><select data-fin-fat-cat="${k.id}"><option value="">Todas (${todas.length})</option>${cats
@@ -1214,7 +1227,6 @@ export function createFin(ctx) {
           : ''
       }
       <div data-fat-lista>${faturaLista(k)}</div>
-      <div class="btn-row"><button type="button" class="btn soft sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button></div>
     </div>`);
   }
 
@@ -1488,10 +1500,10 @@ export function createFin(ctx) {
     'fin-edit-cat': ({ id }) => openCat(achar('cats', id) || {}),
     'fin-new-estim': () => openEstim({}),
     'fin-edit-estim': ({ id }) => openEstim(achar('estim', id) || {}),
-    'fin-fatura': ({ id }) => {
+    'fin-fatura': ({ id, mes }) => {
       const k = cartaoById(id);
-      fatFiltro = { id: '', cat: '' };
-      if (k) openFatura(k);
+      fatFiltro = { id: '', cat: '', ym: '' };
+      if (k) openFatura(k, mes);
     },
     'fin-gasto-cartao': ({ id }) => {
       if (cartaoById(id)) openTx({ tipo: 'saida', cartaoId: id });
@@ -1519,12 +1531,13 @@ export function createFin(ctx) {
       S.finExt.n += 100;
       render();
     },
-    'fin-pagar': async ({ id }) => {
+    'fin-pagar': async ({ id, mes }) => {
       const k = cartaoById(id);
-      const abertas = fatura(k, S.finMes).filter((t) => !t.realizado);
+      const ym = mes || S.finMes;
+      const abertas = fatura(k, ym).filter((t) => !t.realizado);
       if (!abertas.length) return;
       const conta = contaById(k.contaId)?.nome || 'a conta';
-      if (!(await ask(`Pagar a fatura de ${mesCurto(S.finMes)} do ${k.nome}? ${brl(soma(abertas))} saem de ${conta}.`, 'Pagar fatura', false))) return;
+      if (!(await ask(`Pagar a fatura de ${mesCurto(ym)} do ${k.nome}? ${brl(soma(abertas))} saem de ${conta}.`, 'Pagar fatura', false))) return;
       for (const t of abertas) t.realizado = true;
       persist(db.batch(abertas.map((t) => ({ type: 'update', col: COLS.tx, id: t.id, data: { realizado: true } }))));
       toast('Fatura paga.');
@@ -1601,7 +1614,7 @@ export function createFin(ctx) {
     }
     if (el.matches('[data-fin-fat-cat]')) {
       const k = cartaoById(el.dataset.finFatCat);
-      fatFiltro = { id: k?.id || '', cat: el.value };
+      fatFiltro = { ...fatFiltro, id: k?.id || '', cat: el.value };
       const box = document.querySelector('[data-fat-lista]');
       if (k && box) box.innerHTML = faturaLista(k);
       return true;
