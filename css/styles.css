@@ -4417,3 +4417,14 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 /* Fatura: botão de novo gasto logo no topo */
 .fin-fat-topo { margin: 0 0 12px; }
 .fin-fat-topo .btn { flex: 1; justify-content: center; }
+
+/* Aba Transferências: total do mês + botão */
+.fin-transf-topo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  margin-bottom: 10px;
+}
+.fin-transf-topo p { margin: 0; }
+.fin-transf-topo .fin-big { margin-top: 4px; }
