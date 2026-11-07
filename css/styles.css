@@ -4413,3 +4413,7 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 /* Encaixe de tarefa num horário ocupado */
 .encaixe-lista { margin: 8px 0 4px; padding-left: 20px; display: grid; gap: 4px; }
 .encaixe-lista li { font-weight: 600; }
+
+/* Fatura: botão de novo gasto logo no topo */
+.fin-fat-topo { margin: 0 0 12px; }
+.fin-fat-topo .btn { flex: 1; justify-content: center; }
