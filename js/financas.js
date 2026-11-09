@@ -66,6 +66,7 @@ export function createFin(ctx) {
           transf,
           estim: estim.sort((a, b) => (a.dia || 99) - (b.dia || 99) || (a.motivo || '').localeCompare(b.motivo || '', 'pt-BR')),
         };
+        geraAssinaturas();
         render();
       })
       .catch((err) => {
@@ -152,6 +153,57 @@ export function createFin(ctx) {
     const f = fatura(k, ym);
     return f.length > 0 && f.every((t) => t.realizado);
   };
+  // ---------- Assinaturas: cobrança fixa no cartão, lançada sozinha todo mês ----------
+  // Ficam em finEstim com onde: 'cartao'. "geradoAte" = última fatura em que já foi lançada.
+  const ehAssin = (e) => (e.onde || 'conta') === 'cartao';
+  // Dia da compra de uma cobrança que cai na fatura "ym".
+  function compraNaFatura(k, ym, dia) {
+    const fecha = k.fecha || 3;
+    const venc = k.venc || 10;
+    const mesFecha = venc > fecha ? ym : U.addMonths(ym, -1);
+    return diaNoMes((dia || 1) <= fecha ? mesFecha : U.addMonths(mesFecha, -1), dia || 1);
+  }
+  function novaCobranca(e, k, ym) {
+    // Id fixo por assinatura e mês: dois aparelhos abertos não lançam em dobro.
+    return {
+      id: `a_${e.id}_${ym}`, nome: e.motivo, tipo: 'saida', valor: e.valor, data: diaNoMes(ym, k.venc || 10), dataCompra: compraNaFatura(k, ym, e.dia),
+      contaId: k.contaId || null, cartaoId: k.id, catId: e.catId || null, clienteId: null, realizado: false, obs: null, assinaturaId: e.id, criadoEm: Date.now(),
+    };
+  }
+  // Põe cada assinatura ativa em todas as faturas até a que está em uso. Não repete e não recria o que você apagou.
+  function geraAssinaturas() {
+    const ops = [];
+    for (const e of F().estim) {
+      const k = ehAssin(e) && e.cartaoId && cartaoById(e.cartaoId);
+      if (!k || !(e.valor > 0)) continue;
+      const alvo = faturaPadrao(k);
+      const fim = e.ultParcela && e.ultParcela < alvo ? e.ultParcela : alvo;
+      let ult = null;
+      for (let ym = e.geradoAte ? U.addMonths(e.geradoAte, 1) : alvo, i = 0; ym <= fim && i < 24; ym = U.addMonths(ym, 1), i++) {
+        const fat = fatura(k, ym);
+        ult = ym;
+        // Fatura já paga sem ela: o valor já foi pago junto, não reabre a fatura.
+        if (fat.some((t) => t.assinaturaId === e.id) || fatPaga(k, ym)) continue;
+        // Já lançada à mão com o mesmo nome: só liga à assinatura.
+        const igual = fat.find((t) => !t.assinaturaId && norm(t.nome) === norm(e.motivo));
+        if (igual) {
+          igual.assinaturaId = e.id;
+          ops.push({ type: 'update', col: COLS.tx, id: igual.id, data: { assinaturaId: e.id } });
+        } else {
+          const t = novaCobranca(e, k, ym);
+          F().tx.push(t);
+          ops.push({ type: 'set', col: COLS.tx, id: t.id, data: t });
+        }
+      }
+      if (ult && ult !== e.geradoAte) {
+        e.geradoAte = ult;
+        ops.push({ type: 'update', col: COLS.estim, id: e.id, data: { geradoAte: ult } });
+      }
+    }
+    if (ops.length) persist(db.batch(ops));
+    return ops.length;
+  }
+
   // No mês de hoje, se a fatura do mês já foi paga, o cartão mostra a do mês que vem (a que está em uso).
   const mesFatura = (k) => (S.finMes === U.todayStr().slice(0, 7) && fatPaga(k, S.finMes) ? U.addMonths(S.finMes, 1) : S.finMes);
   const ondeTxt = (t) => {
@@ -688,14 +740,29 @@ export function createFin(ctx) {
 
   // ---------- Estimativa de gastos ----------
 
+  function linhaEstim(e) {
+    const k = ehAssin(e) && e.cartaoId && cartaoById(e.cartaoId);
+    const extra = ehAssin(e) ? (k ? ` <small class="muted">${esc(k.nome)}</small>` : ' <small class="fin-sem-k">escolha o cartão</small>') : '';
+    const fim = e.ultParcela ? ` <small class="muted">${ehAssin(e) ? 'última' : 'até'} ${esc(mesCurto(e.ultParcela))}</small>` : '';
+    return `<li><button type="button" data-action="fin-edit-estim" data-id="${e.id}"><span class="fin-estim-dia">${e.dia ? `dia ${e.dia}` : '—'}</span>
+      <span class="grow">${esc(e.motivo)}${extra}${fim}</span><strong>${brl(e.valor)}</strong></button></li>`;
+  }
+  // Assinaturas do cartão: só para saber o que cai todo mês. Não somam na estimativa.
+  function assinaturasCard() {
+    const ym = S.finMes;
+    const lista = F().estim.filter((e) => ehAssin(e) && (!e.ultParcela || e.ultParcela >= ym));
+    return `<section class="card">
+        <header class="fin-sec-head"><h2 class="card-title">${icon('cartao')}Assinaturas</h2><strong>${brl(soma(lista))}</strong></header>
+        <p class="muted sm">Cobradas todo mês no cartão e lançadas sozinhas na fatura. Só para você ver: não somam na estimativa, porque já estão dentro do gasto do cartão.</p>
+        ${lista.length ? `<ul class="fin-contas">${lista.map(linhaEstim).join('')}</ul>` : '<p class="muted sm">Nenhuma assinatura.</p>'}
+        <div class="btn-row"><button type="button" class="btn ghost sm" data-action="fin-new-assin">${icon('plus')}Assinatura</button></div>
+      </section>`;
+  }
+
   function estimHTML() {
     const ym = S.finMes;
-    const ativas = F().estim.filter((e) => !e.ultParcela || e.ultParcela >= ym);
-    const grupos = [
-      ['conta', 'Contas do mês', 'Pagas direto da conta'],
-      ['cartao', 'No cartão', 'Já entram na fatura'],
-    ];
-    const total = soma(ativas);
+    const contas = F().estim.filter((e) => !ehAssin(e) && (!e.ultParcela || e.ultParcela >= ym));
+    const total = soma(contas);
     const real = soma(doMes(ym).filter((t) => t.tipo === 'saida' && (t.contaId || t.cartaoId)));
     const pct = total ? Math.round((real * 100) / total) : 0;
     return `<div class="fin-grid">
@@ -706,24 +773,12 @@ export function createFin(ctx) {
         <div class="bar${pct > 100 ? ' over' : ''}"><span style="width:${Math.min(pct, 100)}%"></span></div>
         <div class="btn-row"><button type="button" class="btn primary sm" data-action="fin-new-estim">${icon('plus')}Gasto estimado</button></div>
       </section>
-      ${grupos
-        .map(([g, titulo, dica]) => {
-          const arr = ativas.filter((e) => (e.onde || 'conta') === g);
-          return `<section class="card">
-          <header class="fin-sec-head"><h2 class="card-title">${titulo}</h2><strong>${brl(soma(arr))}</strong></header>
-          <p class="muted sm">${dica}</p>
-          ${
-            arr.length
-              ? `<ul class="fin-contas">${arr
-                  .map(
-                    (e) => `<li><button type="button" data-action="fin-edit-estim" data-id="${e.id}"><span class="fin-estim-dia">${e.dia ? `dia ${e.dia}` : '—'}</span>
-                <span class="grow">${esc(e.motivo)}${e.ultParcela ? ` <small class="muted">até ${esc(mesCurto(e.ultParcela))}</small>` : ''}</span><strong>${brl(e.valor)}</strong></button></li>`,
-                  )
-                  .join('')}</ul>`
-              : '<p class="muted sm">Nada aqui.</p>'
-          }</section>`;
-        })
-        .join('')}
+      <section class="card">
+        <header class="fin-sec-head"><h2 class="card-title">Contas do mês</h2><strong>${brl(total)}</strong></header>
+        <p class="muted sm">É o que soma na estimativa. O gasto do cartão entra aqui como uma linha só.</p>
+        ${contas.length ? `<ul class="fin-contas">${contas.map(linhaEstim).join('')}</ul>` : '<p class="muted sm">Nada aqui.</p>'}
+      </section>
+      ${assinaturasCard()}
     </div>`;
   }
 
@@ -949,7 +1004,15 @@ export function createFin(ctx) {
             return kk ? faturaOptions(kk, (editing && t.data?.slice(0, 7)) || faturaPadrao(kk, t.dataCompra || U.todayStr())) : '';
           })()}</select></label>
         </div>
-        ${editing ? '' : `<div class="row2"><label class="field"><span>Parcelas</span><input type="number" name="parcelas" min="1" max="48" step="1" inputmode="numeric" value="1" data-fin-parcelas></label><span></span></div>`}
+        ${
+          editing
+            ? t.assinaturaId
+              ? '<p class="hint">Cobrança de assinatura. Para mudar o valor dos próximos meses ou dizer que acabou, use Ver fatura › Assinaturas.</p>'
+              : ''
+            : `<label class="switch-row"><input type="checkbox" name="assinatura" data-fin-assin><span class="switch" aria-hidden="true"></span>
+          <span>É assinatura fixa (cobrada todo mês)</span></label>
+        <div class="row2" data-parcelas-row><label class="field"><span>Parcelas</span><input type="number" name="parcelas" min="1" max="48" step="1" inputmode="numeric" value="1" data-fin-parcelas></label><span></span></div>`
+        }
       </div>
       <div class="row2">
         <label class="field"><span>Descrição</span><select name="catId" data-fin-cat>${catOptions(t.catId || (!editing && ult?.catId) || '', tipo)}</select></label>
@@ -988,7 +1051,9 @@ export function createFin(ctx) {
       fat.innerHTML = faturaOptions(k, form.dataset.id ? atual : faturaPadrao(k, compra));
       if (!form.dataset.id) form.elements.realizado.checked = false;
     }
-    const n = Number(form.elements.parcelas?.value) || 1;
+    const pr = form.querySelector('[data-parcelas-row]');
+    if (pr) pr.hidden = !!form.elements.assinatura?.checked;
+    const n = pr?.hidden ? 1 : Number(form.elements.parcelas?.value) || 1;
     form.querySelector('[data-valor-label]').textContent = k && n > 1 ? 'Valor de cada parcela' : 'Valor';
     form.querySelector('[data-real-label]').textContent = k ? 'Fatura já paga' : tipo === 'entrada' ? 'Já recebi' : 'Já paguei';
     const ondeLbl = onde.closest('label').querySelector('span');
@@ -1035,7 +1100,20 @@ export function createFin(ctx) {
       Object.assign(t, base);
       ops.push({ type: 'update', col: COLS.tx, id, data: base });
     } else {
-      const n = k ? Math.min(48, Math.max(1, Math.round(Number(f.parcelas) || 1))) : 1;
+      const assin = k && base.tipo === 'saida' && f.assinatura === 'on';
+      const n = k && !assin ? Math.min(48, Math.max(1, Math.round(Number(f.parcelas) || 1))) : 1;
+      if (assin) {
+        // Vira assinatura: lança nesta fatura e as próximas entram sozinhas todo mês.
+        const e = {
+          id: U.newId(), motivo: base.nome, valor, dia: Number((base.dataCompra || U.todayStr()).slice(8)), onde: 'cartao',
+          cartaoId: k.id, catId: base.catId, ultParcela: null, geradoAte: data.slice(0, 7),
+        };
+        F().estim.push(e);
+        F().estim.sort((a, b) => (a.dia || 99) - (b.dia || 99));
+        ops.push({ type: 'set', col: COLS.estim, id: e.id, data: e });
+        base.assinaturaId = e.id;
+        toast(`${base.nome} virou assinatura: entra sozinha na fatura todo mês.`);
+      }
       const grupo = n > 1 ? U.newId() : null;
       for (let i = 0; i < n; i++) {
         const t = {
@@ -1052,6 +1130,7 @@ export function createFin(ctx) {
         F().tx.push(t);
         ops.push({ type: 'set', col: COLS.tx, id: t.id, data: t });
       }
+      if (assin) geraAssinaturas();
       if (n > 1) toast(`${n} parcelas lançadas, de ${mesCurto(data.slice(0, 7))} a ${mesCurto(U.addMonths(data.slice(0, 7), n - 1))}.`);
     }
     persist(db.batch(ops));
@@ -1186,12 +1265,90 @@ export function createFin(ctx) {
         <label class="field"><span>Dia <em>opcional</em></span><input type="number" name="dia" min="1" max="31" inputmode="numeric" value="${e.dia || ''}"></label>
       </div>
       <div class="row2">
-        <label class="field"><span>Onde</span><select name="onde">${opt('conta', 'Conta do mês', e.onde || 'conta')}${opt('cartao', 'No cartão', e.onde)}</select></label>
         <label class="field"><span>Última parcela <em>opcional</em></span><input type="month" name="ultParcela" value="${e.ultParcela || ''}"></label>
+        <span></span>
       </div>
       ${modalFoot(editing ? 'fin-del' : '', e.id)}
     </form>`);
     if (editing) modalDel('estim');
+  }
+
+  function openAssin(e) {
+    const editing = !!e.id;
+    openModal(`<form class="modal-body fin-form" data-form="fin-assin" data-id="${e.id || ''}">
+      ${modalHead(editing ? 'Editar assinatura' : 'Nova assinatura')}
+      <label class="field"><span>Nome</span><input name="motivo" required maxlength="80" autocomplete="off" value="${esc(e.motivo || '')}" placeholder="Ex.: Vivo, Google Drive" autofocus></label>
+      <div class="row2">
+        <label class="field"><span>Valor por mês</span><input name="valor" required inputmode="decimal" autocomplete="off" value="${valorInput(e.valor)}" placeholder="0,00"></label>
+        <label class="field"><span>Dia da cobrança</span><input type="number" name="dia" min="1" max="31" inputmode="numeric" value="${e.dia || ''}"></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Cartão</span><select name="cartaoId" required>${e.cartaoId ? '' : '<option value="">Escolha…</option>'}${F()
+          .cartoes.map((c) => opt(c.id, c.nome, e.cartaoId))
+          .join('')}</select></label>
+        <label class="field"><span>Descrição</span><select name="catId">${catOptions(e.catId || '', 'saida')}</select></label>
+      </div>
+      <label class="field"><span>Última cobrança <em>opcional</em></span><input type="month" name="ultParcela" value="${e.ultParcela || ''}"></label>
+      <p class="hint">Entra sozinha em cada fatura, até a que está em uso. Mudar o valor vale para as próximas.</p>
+      ${
+        editing
+          ? `<div class="btn-row">${
+              e.ultParcela
+                ? `<button type="button" class="btn ghost sm" data-action="fin-assin-volta" data-id="${e.id}">${icon('check')}Voltou a cobrar</button>`
+                : `<button type="button" class="btn ghost sm" data-action="fin-assin-fim" data-id="${e.id}">${icon('x')}Acabou (cancelei)</button>`
+            }</div>`
+          : ''
+      }
+      ${modalFoot(editing ? 'fin-del' : '', e.id)}
+    </form>`);
+    if (editing) modalDel('estim');
+  }
+  // Tira as cobranças em aberto lançadas depois da última (só as que o app lançou sozinho).
+  function limpaDepois(e, ops) {
+    if (!e.ultParcela) return;
+    const sobra = F().tx.filter((t) => t.assinaturaId === e.id && t.id.startsWith('a_') && !t.realizado && t.data.slice(0, 7) > e.ultParcela);
+    F().tx = F().tx.filter((t) => !sobra.includes(t));
+    for (const t of sobra) ops.push({ type: 'delete', col: COLS.tx, id: t.id });
+  }
+  function saveAssin(form) {
+    const f = Object.fromEntries(new FormData(form));
+    const valor = valorDe(f.valor);
+    if (!f.motivo.trim() || !(valor > 0)) return toast('Preencha o nome e o valor.');
+    if (!f.cartaoId) return toast('Escolha o cartão em que ela é cobrada.');
+    const id = form.dataset.id;
+    const antes = id && F().estim.find((x) => x.id === id);
+    const data = { motivo: f.motivo.trim(), valor, dia: Number(f.dia) || null, onde: 'cartao', cartaoId: f.cartaoId, catId: f.catId || null, ultParcela: f.ultParcela || null };
+    // Novo, ou trocou de cartão: começa a lançar a partir da fatura em uso.
+    if (!antes || antes.cartaoId !== f.cartaoId) data.geradoAte = null;
+    else if (antes.ultParcela && !data.ultParcela && antes.geradoAte) {
+      // Tirou a última cobrança: volta a lançar só a partir da fatura em uso.
+      const ant = U.addMonths(faturaPadrao(cartaoById(f.cartaoId)), -1);
+      if (antes.geradoAte < ant) data.geradoAte = ant;
+    }
+    salvaDoc('estim', id, data);
+    F().estim.sort((a, b) => (a.dia || 99) - (b.dia || 99));
+    const e = id ? antes : F().estim.find((x) => x.motivo === data.motivo && x.cartaoId === data.cartaoId && !x.geradoAte);
+    const ops = [];
+    if (e) limpaDepois(e, ops);
+    if (ops.length) persist(db.batch(ops));
+    if (geraAssinaturas() || ops.length) render();
+  }
+  // Assinaturas de um cartão (aberta pela fatura).
+  function openAssinCartao(k) {
+    const doK = F().estim.filter((e) => ehAssin(e) && e.cartaoId === k.id);
+    const alvo = faturaPadrao(k);
+    const ativas = doK.filter((e) => !e.ultParcela || e.ultParcela >= alvo);
+    const fim = doK.filter((e) => e.ultParcela && e.ultParcela < alvo);
+    const semCartao = F().estim.filter((e) => ehAssin(e) && !e.cartaoId);
+    const lista = (arr) => `<ul class="fin-contas">${arr.map(linhaEstim).join('')}</ul>`;
+    openModal(`<div class="modal-body fin-form">
+      ${modalHead(`Assinaturas · ${esc(k.nome)}`)}
+      <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-new-assin" data-id="${k.id}">${icon('plus')}Nova assinatura</button></div>
+      <p class="muted sm">Por mês: <strong>${brl(soma(ativas))}</strong>. Toque numa para mudar o valor ou marcar que acabou.</p>
+      ${ativas.length ? lista(ativas) : '<p class="muted sm">Nenhuma assinatura ativa neste cartão.</p>'}
+      ${semCartao.length ? `<p class="fin-grupo neg">Sem cartão definido</p>${lista(semCartao)}` : ''}
+      ${fim.length ? `<details class="fin-fim"><summary>Encerradas (${fim.length})</summary>${lista(fim)}</details>` : ''}
+    </div>`);
   }
 
   // Fatura de um cartão no mês aberto.
@@ -1219,7 +1376,8 @@ export function createFin(ctx) {
     const nomeCat = (c) => (c === '-' ? 'Sem descrição' : catFin(c)?.nome || 'Sem descrição');
     openModal(`<div class="modal-body fin-form">
       ${modalHead(`${esc(k.nome)} · ${esc(mesCurto(ym))}`)}
-      <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button></div>
+      <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-gasto-cartao" data-id="${k.id}">${icon('plus')}Adicionar gasto</button>
+        <button type="button" class="btn ghost sm" data-action="fin-assins" data-id="${k.id}">${icon('cartao')}Assinaturas</button></div>
       ${
         cats.length > 1
           ? `<label class="field"><span>Descrição</span><select data-fin-fat-cat="${k.id}"><option value="">Todas (${todas.length})</option>${cats
@@ -1500,7 +1658,44 @@ export function createFin(ctx) {
     'fin-new-cat': () => openCat({}),
     'fin-edit-cat': ({ id }) => openCat(achar('cats', id) || {}),
     'fin-new-estim': () => openEstim({}),
-    'fin-edit-estim': ({ id }) => openEstim(achar('estim', id) || {}),
+    'fin-edit-estim': ({ id }) => {
+      const e = achar('estim', id) || {};
+      return ehAssin(e) ? openAssin(e) : openEstim(e);
+    },
+    'fin-new-assin': ({ id }) => openAssin({ onde: 'cartao', cartaoId: (id && cartaoById(id) ? id : F().cartoes[0]?.id) || '' }),
+    'fin-assins': ({ id }) => {
+      const k = cartaoById(id);
+      if (k) openAssinCartao(k);
+    },
+    'fin-assin-fim': async ({ id }) => {
+      const e = achar('estim', id);
+      const k = e && cartaoById(e.cartaoId);
+      if (!e) return;
+      const ult = e.geradoAte || (k ? faturaPadrao(k) : U.todayStr().slice(0, 7));
+      if (!(await ask(`Encerrar “${e.motivo}”? A última cobrança fica na fatura de ${mesCurto(ult)} e ela não entra mais nas próximas.`, 'Acabou', false))) return openAssin(e);
+      e.ultParcela = ult;
+      const ops = [{ type: 'update', col: COLS.estim, id, data: { ultParcela: ult } }];
+      limpaDepois(e, ops);
+      persist(db.batch(ops));
+      toast(`${e.motivo} encerrada.`);
+      if (k) openAssinCartao(k);
+      else closeModal();
+      render();
+    },
+    'fin-assin-volta': ({ id }) => {
+      const e = achar('estim', id);
+      if (!e) return;
+      e.ultParcela = null;
+      // Volta a lançar só a partir da fatura em uso, sem cobrar os meses em que ficou parada.
+      const k = cartaoById(e.cartaoId);
+      const antes = k && U.addMonths(faturaPadrao(k), -1);
+      if (antes && e.geradoAte && e.geradoAte < antes) e.geradoAte = antes;
+      persist(db.update(COLS.estim, id, { ultParcela: null, geradoAte: e.geradoAte || null }));
+      geraAssinaturas();
+      toast(`${e.motivo} voltou: entra de novo nas faturas.`);
+      openAssin(e);
+      render();
+    },
     'fin-fatura': ({ id, mes }) => {
       const k = cartaoById(id);
       fatFiltro = { id: '', cat: '', ym: '' };
@@ -1562,7 +1757,7 @@ export function createFin(ctx) {
     'fin-export': () => openExport(),
     'fin-import-ok': () => aplicarImport(),
   };
-  const openAgain = (k, doc) => novoDoc[k]?.(doc);
+  const openAgain = (k, doc) => (k === 'estim' && ehAssin(doc) ? openAssin(doc) : novoDoc[k]?.(doc));
 
   const FORMS = {
     'fin-tx': saveTx,
@@ -1578,9 +1773,10 @@ export function createFin(ctx) {
       const f = Object.fromEntries(new FormData(form));
       const valor = valorDe(f.valor);
       if (!f.motivo.trim() || !(valor > 0)) return toast('Preencha o motivo e o valor.');
-      salvaDoc('estim', form.dataset.id, { motivo: f.motivo.trim(), valor, dia: Number(f.dia) || null, onde: f.onde || 'conta', ultParcela: f.ultParcela || null });
+      salvaDoc('estim', form.dataset.id, { motivo: f.motivo.trim(), valor, dia: Number(f.dia) || null, onde: 'conta', ultParcela: f.ultParcela || null });
       F().estim.sort((a, b) => (a.dia || 99) - (b.dia || 99));
     },
+    'fin-assin': saveAssin,
     'fin-export': doExport,
   };
 
@@ -1602,7 +1798,7 @@ export function createFin(ctx) {
 
   function onChange(el) {
     if (el.matches('[data-fin-f]')) return el.type !== 'search' && onFiltro(el);
-    if (el.matches('[data-fin-tipo], [data-fin-onde], [data-fin-parcelas]')) {
+    if (el.matches('[data-fin-tipo], [data-fin-onde], [data-fin-parcelas], [data-fin-assin]')) {
       syncTxForm(el.form);
       return true;
     }
