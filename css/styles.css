@@ -4428,3 +4428,6 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 }
 .fin-transf-topo p { margin: 0; }
 .fin-transf-topo .fin-big { margin-top: 4px; }
+
+/* Assinatura sem cartão escolhido */
+.fin-sem-k { color: #f59e0b; font-weight: 600; }
