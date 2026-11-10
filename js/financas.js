@@ -486,7 +486,8 @@ export function createFin(ctx) {
     const limite = fimDoMes(hoje.slice(0, 7));
     const nivel = (t) => (!veioDoNotion(t) ? (t.parcela > 1 ? 2 : 0) : (t.data || '') <= limite ? 1 : 2);
     const futuras = f.tipo === 'futuras';
-    const daOnde = (t) => !f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`);
+    // Assinatura de fatura futura não aparece aqui: fica só na fatura e em Assinaturas.
+    const daOnde = (t) => !(t.assinaturaId && (t.data || '') > limite) && (!f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`));
     const nFut = F().tx.filter((t) => nivel(t) === 2 && daOnde(t)).length;
     const ts = F()
       .tx.filter((t) => daOnde(t) && (futuras ? nivel(t) === 2 : nivel(t) !== 2 && (!f.tipo || t.tipo === f.tipo)))
