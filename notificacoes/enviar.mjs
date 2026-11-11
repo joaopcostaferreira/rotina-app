@@ -129,7 +129,7 @@ async function processarUsuario(userDoc) {
   const avisos = [];
   if (p.notifTarefas) {
     for (const t of tarefas) {
-      if (t.concluido || !t.horario || t.aviso === false) continue;
+      if (t.concluido || t.naoFeito || !t.horario || t.aviso === false) continue;
       const antes = Number.isFinite(t.avisoAntes) ? t.avisoAntes : Number(p.avisoAntes) || 0;
       const disparo = toMin(t.horario) - antes;
       if (min >= disparo && min - disparo <= TOLERANCIA_MIN) {
@@ -137,7 +137,7 @@ async function processarUsuario(userDoc) {
       }
     }
   }
-  const pendentes = tarefas.filter((t) => !t.concluido);
+  const pendentes = tarefas.filter((t) => !t.concluido && !t.naoFeito);
   if (p.notifPendentes && p.notifPendentesHora && pendentes.length) {
     const disparo = toMin(p.notifPendentesHora);
     if (min >= disparo && min - disparo <= TOLERANCIA_MIN) {
