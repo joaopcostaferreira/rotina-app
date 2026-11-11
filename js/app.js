@@ -614,23 +614,35 @@ const sumTime = (list) => list.reduce((a, t) => a + elapsed(t), 0);
 
 // Cada play → pausa vira uma sessão { i: início, f: fim, obs: o que fez } em t.sessoes (horários em ms).
 // Pausa: soma o tempo corrido ao acumulado e fecha a sessão aberta.
-function stopTimer(t, ops) {
-  t.tempoGasto = Math.round(elapsed(t));
+// fim: quando parou (padrão agora; "Comecei às…" em outra tarefa para esta no horário dito).
+function stopTimer(t, ops, fim = Date.now()) {
+  const ini = t.cronometroInicio;
+  if (ini) fim = Math.max(fim, ini);
+  t.tempoGasto = Math.round((t.tempoGasto || 0) + (ini ? (fim - ini) / 1000 : 0));
   t.cronometroInicio = null;
   const last = t.sessoes?.[t.sessoes.length - 1];
-  if (last && !last.f) last.f = Date.now();
+  if (last && !last.f) last.f = fim;
   const data = { tempoGasto: t.tempoGasto, cronometroInicio: null };
   if (t.sessoes) data.sessoes = t.sessoes;
   ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data });
 }
 
 // Play: uma coisa de cada vez, então pausa o que estiver rodando e abre uma sessão nova.
-function startTimer(t, ops) {
-  for (const list of Object.values(S.days)) for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops);
-  const now = Date.now();
-  t.cronometroInicio = now;
-  t.sessoes = [...(t.sessoes || []), { i: now }];
-  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { cronometroInicio: now, sessoes: t.sessoes } });
+// inicio: "Comecei às…" (padrão agora). Nunca antes do fim da sessão anterior desta tarefa.
+// Se já está rodando, só acerta o começo da sessão aberta.
+function startTimer(t, ops, inicio = Date.now()) {
+  const ss = t.sessoes || [];
+  const aberta = isRunning(t) && ss.length && !ss[ss.length - 1].f ? ss[ss.length - 1] : null;
+  const anterior = aberta ? ss[ss.length - 2] : ss[ss.length - 1];
+  let ini = Math.min(inicio, Date.now());
+  if (anterior?.f) ini = Math.max(ini, anterior.f);
+  // A que estava rodando para no horário em que esta começou (se começou depois dela); senão, agora.
+  for (const list of Object.values(S.days))
+    for (const o of list || []) if (o !== t && isRunning(o)) stopTimer(o, ops, ini > o.cronometroInicio ? ini : Date.now());
+  t.cronometroInicio = ini;
+  if (aberta) aberta.i = ini;
+  else t.sessoes = [...ss, { i: ini }];
+  ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { cronometroInicio: ini, sessoes: t.sessoes } });
 }
 
 const hhmm = (ms) => {
@@ -1453,7 +1465,7 @@ function openStart({ cli, cat, item, bloco } = {}) {
   }
   if (k && it) {
     const subs = subsOf(k);
-    if (!subs.length) return startTask({ catId: k.id, itemId: it.id, bloco });
+    if (!subs.length) return askComecei({ catId: k.id, itemId: it.id, bloco });
     openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-item="${it.id}" data-start-bloco="${bloco || ''}">
       <header class="modal-head">${back}<h2>${esc(it.nome)}</h2>
         <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
@@ -1487,7 +1499,27 @@ function openStart({ cli, cat, item, bloco } = {}) {
   </div>`);
 }
 
-async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloco = '' }) {
+// Último passo antes do play: "Comecei:" com a hora em branco e o botão "Comecei agora" (vira "OK" com a hora preenchida).
+function askComecei(p) {
+  const c = cliById(p.cliId);
+  const it = itensOf(catById(p.catId)).find((x) => x.id === p.itemId);
+  const nome = c ? [p.servico || c.nome, p.pessoa].filter(Boolean).join(' · ') : [it?.nome, p.servico].filter(Boolean).join(' · ');
+  const sub = c && p.servico ? c.nome : '';
+  const voltar = c ? `data-cli="${c.id}"` : `data-cat="${p.catId || ''}" data-item="${p.itemId || ''}"`;
+  openModal(`<form class="modal-body start comecei" data-form="comecei" data-p="${esc(JSON.stringify(p))}">
+    <header class="modal-head">
+      <button type="button" class="icon-btn" data-action="start-pick" ${voltar} data-bloco="${p.bloco || ''}" aria-label="Voltar">${icon('left')}</button>
+      <h2>${esc(nome)}</h2>
+      <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
+    ${sub ? `<p class="muted sm comecei-sub">${esc(sub)}</p>` : ''}
+    <label class="comecei-campo"><span>Comecei:</span><input type="time" name="ini" data-comecei aria-label="Horário em que começou"></label>
+    <footer class="modal-actions">
+      <button type="submit" class="btn primary comecei-btn" data-comecei-btn>${icon('play')}<span>Comecei agora</span></button>
+    </footer>
+  </form>`);
+}
+
+async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloco = '', inicio = null }) {
   const today = U.todayStr();
   const list = await ensureDay(today);
   const c = cliById(cliId);
@@ -1527,11 +1559,11 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
     b.concluido = true;
     ops.push({ type: 'update', col: 'dailyTasks', id: b.id, data: { concluido: true } });
   }
-  if (!isRunning(t)) startTimer(t, ops);
+  if (!isRunning(t) || inicio) startTimer(t, ops, inicio || Date.now());
   closeModal();
   render();
   persist(db.batch(ops));
-  toast(`Cronômetro ligado: ${t.titulo}${c ? ` · ${c.nome}` : ''}`);
+  toast(`Cronômetro ligado${inicio ? ` desde ${hhmm(t.cronometroInicio)}` : ''}: ${t.titulo}${c ? ` · ${c.nome}` : ''}`);
 }
 
 // Depois de play/pausa/concluir, atualiza o painel da tarefa se ele estiver aberto.
@@ -3050,7 +3082,24 @@ const FORMS = {
       pessoa.focus();
       return toast('Escreva o nome da pessoa.');
     }
-    return startTask({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+    return askComecei({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+  },
+
+  comecei(form) {
+    let p = {};
+    try {
+      p = JSON.parse(form.dataset.p || '{}');
+    } catch {}
+    const v = form.elements.ini.value;
+    if (v) {
+      const ini = tsOf(U.todayStr(), U.toMin(v));
+      if (ini > Date.now() + 60_000) {
+        form.elements.ini.focus();
+        return toast('Esse horário ainda não chegou.');
+      }
+      p.inicio = ini;
+    }
+    return startTask(p);
   },
 
   async daily(form) {
@@ -3371,9 +3420,9 @@ const ACTIONS = {
         pessoa.focus();
         return toast('Escreva o nome da pessoa.');
       }
-      return startTask({ cliId: box.dataset.startCli, servico: serv, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+      return askComecei({ cliId: box.dataset.startCli, servico: serv, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
     }
-    return startTask({ catId: box.dataset.startCat, itemId: box.dataset.startItem, servico: serv, bloco: box.dataset.startBloco });
+    return askComecei({ catId: box.dataset.startCat, itemId: box.dataset.startItem, servico: serv, bloco: box.dataset.startBloco });
   },
   'open-task': ({ id, date }) => {
     const t = findTask(id, date);
@@ -3661,6 +3710,11 @@ document.addEventListener('submit', async (e) => {
 document.addEventListener('change', (e) => {
   const t = e.target;
   if (FIN.onChange(t)) return;
+  if (t.matches('[data-comecei]')) {
+    const b = t.form.querySelector('[data-comecei-btn] span');
+    if (b) b.textContent = t.value ? 'OK' : 'Comecei agora';
+    return;
+  }
   if (t.matches('[data-import-file]')) {
     const file = t.files?.[0];
     t.value = '';
@@ -3699,7 +3753,10 @@ document.addEventListener('change', (e) => {
 document.addEventListener('input', (e) => {
   const el = e.target;
   if (FIN.onInput(el)) return;
-  if (el.matches('[data-horario]')) {
+  if (el.matches('[data-comecei]')) {
+    const b = el.form.querySelector('[data-comecei-btn] span');
+    if (b) b.textContent = el.value ? 'OK' : 'Comecei agora';
+  } else if (el.matches('[data-horario]')) {
     const form = el.form;
     const group = form.querySelector('[data-aviso-group]');
     if (group) group.hidden = !el.value;
