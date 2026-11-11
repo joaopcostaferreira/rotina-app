@@ -13,6 +13,7 @@ const COLS = {
   tx: 'finTx',
   transf: 'finTransf',
   estim: 'finEstim',
+  emp: 'finEmp',
 };
 const GRUPOS = [
   ['entrada', 'Entrada'],
@@ -56,7 +57,7 @@ export function createFin(ctx) {
   function load(force = false) {
     if (carregando && !force) return carregando;
     carregando = Promise.all(Object.values(COLS).map((c) => db.list(c)))
-      .then(([contas, cartoes, cats, tx, transf, estim]) => {
+      .then(([contas, cartoes, cats, tx, transf, estim, emp]) => {
         const porNome = (a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
         S.fin = {
           contas: contas.sort(porNome),
@@ -65,6 +66,7 @@ export function createFin(ctx) {
           tx,
           transf,
           estim: estim.sort((a, b) => (a.dia || 99) - (b.dia || 99) || (a.motivo || '').localeCompare(b.motivo || '', 'pt-BR')),
+          emp: emp.sort((a, b) => (b.data || '').localeCompare(a.data || '')),
         };
         geraAssinaturas();
         render();
@@ -140,6 +142,10 @@ export function createFin(ctx) {
       if (!t.realizado) continue;
       if (t.paraId in m) m[t.paraId] += t.valor;
       if (t.deId in m) m[t.deId] -= t.valor;
+    }
+    for (const e of F().emp) {
+      if (e.contaId in m) m[e.contaId] -= e.valor;
+      for (const a of e.abat || []) if (a.contaId in m) m[a.contaId] += a.valor;
     }
     for (const k in m) m[k] = r2(m[k]) || 0; // sem "-0,00" de arredondamento
     return m;
@@ -305,6 +311,7 @@ export function createFin(ctx) {
     const previsto = r2(total + pendentes.reduce((s, t) => s + sinal(t) * t.valor, 0));
 
     const contas = F().contas.filter((c) => !c.arquivada || Math.abs(sal[c.id]) > 0.004);
+    const aReceber = r2(F().emp.reduce((s, e) => s + falta(e), 0));
     const linhaConta = (c) => `<li><button type="button" data-action="fin-edit-conta" data-id="${c.id}">
       <span class="dot" style="--c:${c.cor || '#64748b'}"></span><span class="grow">${esc(c.nome)}</span>
       <strong class="${sal[c.id] < 0 ? 'neg' : ''}">${brl(sal[c.id])}</strong></button></li>`;
@@ -314,6 +321,7 @@ export function createFin(ctx) {
         <p class="muted sm">Saldo total</p>
         <p class="fin-big ${total < 0 ? 'neg' : ''}">${brl(total)}</p>
         <p class="muted sm">Previsto no fim de ${esc(mesCurto(ym))}: <strong>${brl(previsto)}</strong></p>
+        ${aReceber ? `<p class="muted sm">Emprestado, a receber: <strong>${brl(aReceber)}</strong></p>` : ''}
         <ul class="fin-contas">${contas.map(linhaConta).join('')}</ul>
       </section>
 
@@ -324,7 +332,8 @@ export function createFin(ctx) {
           ${kpi('Saídas', soma(sai.filter((t) => t.realizado)), soma(sai), 'out')}
           ${kpi('Resultado', r2(soma(ent.filter((t) => t.realizado)) - soma(sai.filter((t) => t.realizado))), r2(soma(ent) - soma(sai)), 'res')}
         </div>
-        ${categoriasDoMes(sai, ent)}
+        <div class="fin-mes-btns">${categoriasDoMes(sai, ent)}
+          <button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Dinheiro emprestado${aReceber ? ` · ${brl(aReceber)}` : ''}</button></div>
       </section>
 
       ${F().cartoes.length ? `<section class="card fin-cartoes"><h2 class="card-title">${icon('cartao')}Cartões</h2>${F().cartoes.map(cartaoCard).join('')}</section>` : ''}
@@ -340,6 +349,106 @@ export function createFin(ctx) {
     const p = cls === 'res' ? comSinal(prev) : brl(prev);
     return `<div class="kpi ${cls}${cls === 'res' && real < 0 ? ' neg' : ''}"><span class="muted sm">${rotulo}</span><strong>${v}</strong>
       ${Math.abs(prev - real) > 0.004 ? `<small class="muted">previsto ${p}</small>` : '<small class="muted">&nbsp;</small>'}</div>`;
+  }
+
+  // ---------- Dinheiro emprestado ----------
+  // Sai da conta quando você empresta e volta quando abate. Não conta como saída nem como entrada.
+  const recebido = (e) => r2((e.abat || []).reduce((s, a) => s + a.valor, 0));
+  const falta = (e) => Math.max(0, r2(e.valor - recebido(e)));
+  function openEmps() {
+    const ativos = F().emp.filter((e) => falta(e) > 0.004);
+    const quitados = F().emp.filter((e) => falta(e) <= 0.004);
+    const linha = (e) => `<li class="fin-emp">
+      <button type="button" class="grow" data-action="fin-emp-edit" data-id="${e.id}">
+        <span class="fin-emp-nome">${esc(e.nome)}</span>
+        <small class="muted">${esc(contaById(e.contaId)?.nome || 'Sem conta')} · ${e.data ? diaMes(e.data) : '—'} · emprestou ${brl(e.valor)}${recebido(e) ? ` · recebeu ${brl(recebido(e))}` : ''}</small>
+      </button>
+      <strong>${brl(falta(e))}</strong>
+      ${falta(e) > 0.004 ? `<button type="button" class="btn soft sm" data-action="fin-abater" data-id="${e.id}">Abater</button>` : ''}
+    </li>`;
+    openModal(`<div class="modal-body fin-form">
+      ${modalHead('Dinheiro emprestado')}
+      <p class="muted sm">A receber</p>
+      <p class="fin-big sm">${brl(soma(ativos.map((e) => ({ valor: falta(e) }))))}</p>
+      <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-emp-novo">${icon('plus')}Emprestar dinheiro</button></div>
+      <p class="hint">Sai da conta, mas não conta como saída. Quando a pessoa pagar, toque em Abater: volta para a conta sem contar como entrada.</p>
+      ${ativos.length ? `<ul class="fin-emps">${ativos.map(linha).join('')}</ul>` : '<p class="muted sm">Nada emprestado agora.</p>'}
+      ${quitados.length ? `<details class="fin-fim"><summary>Quitados (${quitados.length})</summary><ul class="fin-emps">${quitados.map(linha).join('')}</ul></details>` : ''}
+    </div>`);
+  }
+  function contaOptions(sel) {
+    const contas = F().contas.filter((c) => !c.arquivada || c.id === sel);
+    return `${sel ? '' : '<option value="">Escolha…</option>'}${contas.map((c) => opt(c.id, c.nome, sel)).join('')}`;
+  }
+  function openEmp(e) {
+    const editing = !!e.id;
+    const abat = e.abat || [];
+    openModal(`<form class="modal-body fin-form" data-form="fin-emp" data-id="${e.id || ''}">
+      ${modalHead(editing ? 'Editar empréstimo' : 'Emprestar dinheiro')}
+      <label class="field"><span>Para quem</span><input name="nome" required maxlength="80" autocomplete="off" value="${esc(e.nome || '')}" placeholder="Ex.: Nenêzinha" autofocus></label>
+      <div class="row2">
+        <label class="field"><span>Valor emprestado</span><input name="valor" required inputmode="decimal" autocomplete="off" value="${valorInput(e.valor)}" placeholder="0,00"></label>
+        <label class="field"><span>Saiu de</span><select name="contaId" required>${contaOptions(e.contaId || '')}</select></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Data</span><input type="date" name="data" value="${e.data || U.todayStr()}"></label>
+        <span></span>
+      </div>
+      <label class="field"><span>Observação <em>opcional</em></span><input name="obs" maxlength="300" autocomplete="off" value="${esc(e.obs || '')}"></label>
+      ${
+        abat.length
+          ? `<p class="fin-grupo">Já recebido: ${brl(recebido(e))} · falta ${brl(falta(e))}</p>
+        <ul class="fin-itens-lista">${abat
+          .map(
+            (a, i) => `<li><span>${diaMes(a.data)}</span><span class="grow muted sm">${esc(contaById(a.contaId)?.nome || '')}</span><strong>${brl(a.valor)}</strong>
+          <button type="button" class="icon-btn sm" data-action="fin-abat-del" data-id="${e.id}" data-i="${i}" aria-label="Desfazer este abatimento">${icon('x')}</button></li>`,
+          )
+          .join('')}</ul>`
+          : ''
+      }
+      ${modalFoot(editing ? 'fin-del' : '', e.id)}
+    </form>`);
+    if (editing) modalDel('emp');
+  }
+  function saveEmp(form) {
+    const f = Object.fromEntries(new FormData(form));
+    const valor = valorDe(f.valor);
+    if (!f.nome.trim() || !(valor > 0)) return toast('Preencha para quem e o valor.');
+    if (!f.contaId) return toast('Escolha de qual conta saiu o dinheiro.');
+    const data = { nome: f.nome.trim(), valor, contaId: f.contaId, data: f.data || U.todayStr(), obs: f.obs?.trim() || null };
+    if (!form.dataset.id) Object.assign(data, { abat: [], criadoEm: Date.now() });
+    salvaDoc('emp', form.dataset.id, data);
+    F().emp.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+    openEmps();
+  }
+  // Abater: abre com o que falta; mude o valor se recebeu só uma parte.
+  function openAbater(e) {
+    openModal(`<form class="modal-body fin-form" data-form="fin-abater" data-id="${e.id}">
+      ${modalHead(`Abater · ${esc(e.nome)}`)}
+      <p class="muted sm">Falta receber <strong>${brl(falta(e))}</strong> de ${brl(e.valor)}.</p>
+      <div class="row2">
+        <label class="field"><span>Valor recebido ${icon('edit')}</span><input name="valor" required inputmode="decimal" autocomplete="off" value="${valorInput(falta(e))}"></label>
+        <label class="field"><span>Entrou em</span><select name="contaId" required>${contaOptions(e.contaId || '')}</select></label>
+      </div>
+      <label class="field"><span>Data</span><input type="date" name="data" value="${U.todayStr()}"></label>
+      <p class="hint">Volta para a conta sem contar como entrada.</p>
+      <footer class="modal-actions"><span class="grow"></span>
+        <button type="button" class="btn ghost" data-action="fin-emps">Cancelar</button>
+        <button type="submit" class="btn primary">Abater</button></footer>
+    </form>`);
+  }
+  function saveAbater(form) {
+    const e = F().emp.find((x) => x.id === form.dataset.id);
+    if (!e) return closeModal();
+    const f = Object.fromEntries(new FormData(form));
+    const valor = valorDe(f.valor);
+    if (!(valor > 0)) return toast('Digite o valor recebido.');
+    if (valor > falta(e) + 0.004) return toast(`Falta só ${brl(falta(e))}.`);
+    e.abat = [...(e.abat || []), { data: f.data || U.todayStr(), valor, contaId: f.contaId || e.contaId }];
+    persist(db.update(COLS.emp, e.id, { abat: e.abat }));
+    toast(falta(e) > 0.004 ? `Abatido ${brl(valor)}. Falta ${brl(falta(e))}.` : `${e.nome} quitou tudo.`);
+    render();
+    openEmps();
   }
 
   // Saldo por categoria: abre numa janela, para não empurrar os cartões para baixo.
@@ -1515,7 +1624,7 @@ export function createFin(ctx) {
     const { data } = p;
     const ops = [];
     // Apaga o que existe (substituir).
-    for (const [k, col] of Object.entries(COLS)) for (const d of F()[k]) ops.push({ type: 'delete', col, id: d.id });
+    for (const [k, col] of Object.entries(COLS)) if (k !== 'emp') for (const d of F()[k]) ops.push({ type: 'delete', col, id: d.id });
     const id = {};
     const novo = (k, nome) => (id[`${k}:${nome}`] = U.newId());
     const ref = (k, nome) => (nome ? id[`${k}:${nome}`] || null : null);
@@ -1578,15 +1687,15 @@ export function createFin(ctx) {
   // Backup geral (JSON) inclui as finanças.
   async function backup() {
     if (!S.fin) await load();
-    const { contas, cartoes, cats, tx, transf, estim } = F();
-    return { contas, cartoes, descricoes: cats, lancamentos: tx, transferencias: transf, estimativas: estim };
+    const { contas, cartoes, cats, tx, transf, estim, emp } = F();
+    return { contas, cartoes, descricoes: cats, lancamentos: tx, transferencias: transf, estimativas: estim, emprestimos: emp };
   }
 
   // -------------------------------------------------------------------------
   // Ações e eventos
   // -------------------------------------------------------------------------
 
-  const novoDoc = { tx: openTx, transf: openTransf, contas: openConta, cartoes: openCartao, cats: openCat, estim: openEstim };
+  const novoDoc = { tx: openTx, transf: openTransf, contas: openConta, cartoes: openCartao, cats: openCat, estim: openEstim, emp: openEmp };
   const achar = (k, id) => F()[k].find((x) => x.id === id);
 
   const ACTIONS = {
@@ -1706,6 +1815,23 @@ export function createFin(ctx) {
       if (cartaoById(id)) openTx({ tipo: 'saida', cartaoId: id });
     },
     'fin-cats-mes': () => openCatsMes(),
+    'fin-emps': () => openEmps(),
+    'fin-emp-novo': () => (F().contas.length ? openEmp({ contaId: F().contas.find((c) => !c.arquivada)?.id }) : toast('Cadastre antes uma conta.')),
+    'fin-emp-edit': ({ id }) => openEmp(achar('emp', id) || {}),
+    'fin-abater': ({ id }) => {
+      const e = achar('emp', id);
+      if (e) openAbater(e);
+    },
+    'fin-abat-del': async ({ id, i }) => {
+      const e = achar('emp', id);
+      const a = e?.abat?.[Number(i)];
+      if (!a) return;
+      if (!(await ask(`Desfazer o abatimento de ${brl(a.valor)} de ${diaMes(a.data)}?`, 'Desfazer', false))) return openEmp(e);
+      e.abat = e.abat.filter((_, j) => j !== Number(i));
+      persist(db.update(COLS.emp, e.id, { abat: e.abat }));
+      render();
+      openEmp(e);
+    },
     'fin-item-add': () => {
       const form = document.querySelector('#modal form[data-form="fin-tx"]');
       if (form) addItem(form);
@@ -1744,11 +1870,12 @@ export function createFin(ctx) {
       const k = col || 'tx';
       const doc = achar(k, id);
       if (!doc) return closeModal();
-      if (k === 'contas' && (F().tx.some((t) => t.contaId === id) || F().transf.some((t) => t.deId === id || t.paraId === id) || F().cartoes.some((c) => c.contaId === id))) {
+      if (k === 'contas' && (F().tx.some((t) => t.contaId === id) || F().transf.some((t) => t.deId === id || t.paraId === id) || F().cartoes.some((c) => c.contaId === id) || F().emp.some((e) => e.contaId === id))) {
         return toast('Esta conta tem lançamentos. Marque “Arquivada” em vez de excluir.');
       }
       if (k === 'cartoes' && F().tx.some((t) => t.cartaoId === id)) return toast('Este cartão tem lançamentos e não pode ser excluído.');
       const nome = doc.nome || doc.motivo || 'este item';
+      if (k === 'emp' && recebido(doc) && !(await ask(`“${doc.nome}” já tem ${brl(recebido(doc))} abatido. Excluir apaga também esses recebimentos.`, 'Continuar'))) return openEmp(doc);
       if (!(await ask(`Excluir “${nome}”?`))) return openAgain(k, doc);
       F()[k] = F()[k].filter((x) => x !== doc);
       if (k === 'cats') for (const t of F().tx) if (t.catId === id) t.catId = null;
@@ -1778,6 +1905,8 @@ export function createFin(ctx) {
       F().estim.sort((a, b) => (a.dia || 99) - (b.dia || 99));
     },
     'fin-assin': saveAssin,
+    'fin-emp': saveEmp,
+    'fin-abater': saveAbater,
     'fin-export': doExport,
   };
 
