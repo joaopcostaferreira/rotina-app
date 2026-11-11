@@ -4674,3 +4674,40 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-emp-ok .i { width: 14px; height: 14px; }
 .fin-emp.pago .fin-emp-nome { color: var(--muted); }
 .fin-fim summary { padding: 6px 0; list-style-position: inside; }
+
+/* Não feito (X): ao lado do play e da nota; o bloco fica vermelho e riscado */
+.icon-btn.xs.nf-btn:hover { color: var(--danger); }
+.icon-btn.xs.nf-btn.on { background: var(--danger); color: #fff; }
+.task .nf-btn { width: 28px; height: 28px; border-radius: 99px; flex: none; color: var(--muted); }
+.task .nf-btn.on { background: var(--danger); color: #fff; }
+.block.nf { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); border-left-color: var(--danger); }
+.block.nf .block-title,
+.task.nf .task-title { text-decoration: line-through; text-decoration-color: var(--danger); color: var(--muted); }
+.block.nf .block-sub { color: var(--danger); }
+.task.nf .check,
+.block.nf .b-check { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); }
+.nf-txt { color: var(--danger); font-weight: 600; }
+.nf-aviso {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -4px 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  font-size: 14px;
+}
+.nf-aviso > .i { width: 16px; height: 16px; color: var(--danger); flex: none; margin-top: 2px; }
+.nf-aviso a { color: inherit; }
+.btn.nf-on { color: var(--danger); }
+.rel-tile.nf strong { color: var(--danger); }
+.nf-total { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+.nf-total strong { font-size: 26px; color: var(--danger); font-variant-numeric: tabular-nums; }
+.nf-total span { color: var(--muted); font-size: 14px; }
+.nf-card .tb-head .name .dot { margin-right: 6px; }
+.nf-lista { list-style: none; margin: 12px 0 8px; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+.nf-lista li { display: flex; justify-content: space-between; gap: 10px; padding-top: 6px; border-top: 1px solid var(--border); }
+.nf-lista li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; text-decoration-color: var(--danger); }
+.nf-lista li small { white-space: nowrap; }
+.terminei-dica { margin: -2px 0 10px; }
