@@ -4639,3 +4639,21 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
   min-width: 150px;
   justify-content: center;
 }
+
+/* Dinheiro emprestado: valores sem quebrar no meio e "Quitado" no lugar de R$ 0,00 */
+.nw { white-space: nowrap; }
+.fin-emp-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pos) 14%, transparent);
+  color: var(--pos);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fin-emp-ok .i { width: 14px; height: 14px; }
+.fin-emp.pago .fin-emp-nome { color: var(--muted); }
+.fin-fim summary { padding: 6px 0; list-style-position: inside; }
