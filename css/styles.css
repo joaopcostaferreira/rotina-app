@@ -4711,3 +4711,35 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .nf-lista li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: line-through; text-decoration-color: var(--danger); }
 .nf-lista li small { white-space: nowrap; }
 .terminei-dica { margin: -2px 0 10px; }
+
+/* ---------- v25: Resumo das finanças com Resultado, duas pizzas e emprestado ---------- */
+/* Coluna da esquerda: Saldo total e Cartões colados, independente da altura do mês. */
+.fin-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fin-col > .card { margin: 0; padding: 18px; }
+.fin-res-l { margin: 4px 0 0; }
+.fin-res { margin-bottom: 2px; }
+.fin-res.pos { color: var(--pos); }
+.fin-res.neg { color: var(--neg); }
+/* Ganhos: verdes e azuis. Gastos: vermelhos, laranjas e amarelos. Validadas para daltonismo, vizinhas bem diferentes. */
+:root {
+  --gg1: #16a34a; --gg2: #6366f1; --gg3: #65a30d; --gg4: #1d4ed8; --gg5: #22c55e; --gg6: #3b82f6; --gg7: #06b6d4; --gg8: #4f46e5;
+  --gs1: #dc2626; --gs2: #ca8a04; --gs3: #b91c1c; --gs4: #f87171; --gs5: #b45309; --gs6: #fb7185; --gs7: #c2410c; --gs8: #f59e0b;
+}
+.fin-g-fatia.apaga { opacity: 0.3; }
+.fin-ganhos-lista li.on > * { color: var(--text); font-weight: 600; }
+.fin-pizza { touch-action: manipulation; }
+.fin-empbox-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.fin-empbox-top .fin-ganhos-tit { margin: 0; }
+.fin-empbox-top .btn .i { width: 16px; height: 16px; }
+.fin-emps-mini { margin-top: 6px; }
+.fin-emps-mini .fin-emp { padding: 8px 0; }
+.fin-empbox .fin-cats-btn { margin-top: 6px; }
+@media (max-width: 899px) {
+  .fin-col { display: contents; }
+  .fin-col > .card { padding: 14px; }
+}
+@media (max-width: 420px) {
+  .fin-emps-mini .fin-emp { flex-wrap: wrap; row-gap: 6px; }
+  .fin-emps-mini .fin-emp > button.grow { flex-basis: 100%; }
+  .fin-emps-mini .fin-emp > strong { flex: 1; }
+}

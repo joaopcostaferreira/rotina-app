@@ -319,28 +319,32 @@ export function createFin(ctx) {
       <span class="dot" style="--c:${c.cor || '#64748b'}"></span><span class="grow">${esc(c.nome)}</span>
       <strong class="${sal[c.id] < 0 ? 'neg' : ''}">${brl(sal[c.id])}</strong></button></li>`;
 
+    // Resultado do mês até agora (só o que já aconteceu); o previsto aparece embaixo quando é diferente.
+    const res = r2(soma(ent.filter((t) => t.realizado)) - soma(sai.filter((t) => t.realizado)));
+    const resPrev = r2(soma(ent) - soma(sai));
+
+    // Duas colunas independentes: Saldo + Cartões à esquerda e o mês à direita (os cartões ficam colados no saldo).
     return `<div class="fin-grid">
-      <section class="card fin-saldo">
-        <p class="muted sm">Saldo total</p>
-        <p class="fin-big ${total < 0 ? 'neg' : ''}">${brl(total)}</p>
-        <p class="muted sm">Previsto no fim de ${esc(mesCurto(ym))}: <strong>${brl(previsto)}</strong></p>
-        ${aReceber ? `<p class="muted sm">Emprestado, a receber: <strong>${brl(aReceber)}</strong></p>` : ''}
-        <ul class="fin-contas">${contas.map(linhaConta).join('')}</ul>
-      </section>
+      <div class="fin-col">
+        <section class="card fin-saldo">
+          <p class="muted sm">Saldo total</p>
+          <p class="fin-big ${total < 0 ? 'neg' : ''}">${brl(total)}</p>
+          <p class="muted sm">Previsto no fim de ${esc(mesCurto(ym))}: <strong>${brl(previsto)}</strong></p>
+          ${aReceber ? `<p class="muted sm">Emprestado, a receber: <strong>${brl(aReceber)}</strong></p>` : ''}
+          <ul class="fin-contas">${contas.map(linhaConta).join('')}</ul>
+        </section>
+        ${F().cartoes.length ? `<section class="card fin-cartoes"><h2 class="card-title">${icon('cartao')}Cartões</h2>${F().cartoes.map(cartaoCard).join('')}</section>` : ''}
+      </div>
 
       <section class="card fin-mesbox">
         <h2 class="card-title">${icon('calendario')}${esc(U.fmtMes(ym))}</h2>
-        <div class="fin-kpis">
-          ${kpi('Entradas', soma(ent.filter((t) => t.realizado)), soma(ent), 'in')}
-          ${kpi('Saídas', soma(sai.filter((t) => t.realizado)), soma(sai), 'out')}
-          ${kpi('Resultado', r2(soma(ent.filter((t) => t.realizado)) - soma(sai.filter((t) => t.realizado))), r2(soma(ent) - soma(sai)), 'res')}
-        </div>
-        <div class="fin-mes-btns">${categoriasDoMes(sai, ent)}
-          <button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Dinheiro emprestado${aReceber ? ` · ${brl(aReceber)}` : ''}</button></div>
-        ${ganhosHTML(ent)}
+        <p class="muted sm fin-res-l">Resultado do mês até agora</p>
+        <p class="fin-big fin-res ${res < 0 ? 'neg' : 'pos'}">${comSinal(res)}</p>
+        ${Math.abs(resPrev - res) > 0.004 ? `<p class="muted sm">Previsto até o fim do mês: <strong>${comSinal(resPrev)}</strong></p>` : ''}
+        ${pizzaHTML('ganhos', ent)}
+        ${pizzaHTML('gastos', sai)}
+        ${empBoxHTML()}
       </section>
-
-      ${F().cartoes.length ? `<section class="card fin-cartoes"><h2 class="card-title">${icon('cartao')}Cartões</h2>${F().cartoes.map(cartaoCard).join('')}</section>` : ''}
 
       ${semanaHTML()}
 
@@ -348,63 +352,116 @@ export function createFin(ctx) {
     </div>`;
   }
 
-  function kpi(rotulo, real, prev, cls) {
-    const v = cls === 'res' ? comSinal(real) : brl(real);
-    const p = cls === 'res' ? comSinal(prev) : brl(prev);
-    return `<div class="kpi ${cls}${cls === 'res' && real < 0 ? ' neg' : ''}"><span class="muted sm">${rotulo}</span><strong>${v}</strong>
-      ${Math.abs(prev - real) > 0.004 ? `<small class="muted">previsto ${p}</small>` : '<small class="muted">&nbsp;</small>'}</div>`;
-  }
-
-  // ---------- Ganhos do mês: quanto veio de cada cliente ----------
-  // Entrada com cliente vai para o cliente; sem cliente, para a descrição.
-  // Cada cliente tem a sua fatia e a sua cor (12 cores fixas; do 13º em diante, cores calculadas).
-  function ganhosHTML(ent) {
-    if (!ent.length) return '';
+  // ---------- Ganhos e gastos do mês (pizzas) ----------
+  // Ganhos: por cliente (sem cliente, pela descrição), em tons de verde e azul.
+  // Gastos: por descrição (categoria), em tons de vermelho, laranja e amarelo.
+  // 8 cores fixas por pizza (validadas para daltonismo); da 9ª em diante, tons calculados na mesma família.
+  // Passar o mouse (ou o dedo) numa fatia ou num nome apaga as outras e mostra o valor no meio da pizza.
+  const PIZZA = {
+    ganhos: { tit: 'Ganhos do mês', aria: 'Ganhos do mês por cliente', vazio: 'Nenhum ganho neste mês.', falta: 'a receber', hue: [125, 235], v: 'gg' },
+    gastos: { tit: 'Gastos do mês', aria: 'Gastos do mês por descrição', vazio: 'Nenhum gasto neste mês.', falta: 'a pagar', hue: [0, 48], v: 'gs' },
+  };
+  function pizzaHTML(tipo, lista) {
+    const P = PIZZA[tipo];
+    if (!lista.length) return `<div class="fin-ganhos fin-${tipo}"><p class="fin-ganhos-tit">${P.tit}</p><p class="muted sm">${P.vazio}</p></div>`;
     const por = new Map();
-    for (const t of ent) {
-      const c = t.clienteId && cliById(t.clienteId);
-      const nome = c ? c.nome : (t.catId && catFin(t.catId)?.nome) || 'Sem cliente';
+    for (const t of lista) {
+      const c = tipo === 'ganhos' && t.clienteId && cliById(t.clienteId);
+      const nome = c ? c.nome : (t.catId && catFin(t.catId)?.nome) || (tipo === 'ganhos' ? 'Sem cliente' : 'Sem descrição');
       const g = por.get(nome) || { nome, valor: 0, falta: 0 };
       g.valor = r2(g.valor + t.valor);
       if (!t.realizado) g.falta = r2(g.falta + t.valor);
       por.set(nome, g);
     }
-    const todos = [...por.values()].sort((a, b) => b.valor - a.valor);
-    const grupos = todos;
-    const corG = (i) => (i < 12 ? `var(--g${i + 1})` : `hsl(${Math.round((i * 137.5) % 360)} 62% 52%)`);
+    const grupos = [...por.values()].sort((a, b) => b.valor - a.valor);
+    const [h0, h1] = P.hue;
+    const cor = (i) => (i < 8 ? `var(--${P.v}${i + 1})` : `hsl(${Math.round(h0 + ((i * 37) % (h1 - h0)))} 70% ${i % 2 ? 40 : 55}%)`);
     const total = soma(grupos);
-    const falta = r2(todos.reduce((s, g) => s + g.falta, 0));
+    const falta = r2(grupos.reduce((s, g) => s + g.falta, 0));
     const R = 48;
     const C = 2 * Math.PI * R;
     const gap = grupos.length > 1 ? 2 : 0;
+    const centro = (v) => (v >= 10000 ? `R$ ${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : brlCurto(v));
     let ini = 0;
-    const fatias = grupos.map((g, i) => {
+    const arcos = grupos.map((g, i) => {
       const len = total ? (g.valor / total) * C : 0;
-      const cor = corG(i);
-      const arco = `<circle class="fin-g-fatia" data-g="${i}" r="${R}" cx="60" cy="60" stroke="${cor}" stroke-dasharray="${Math.max(0, len - gap).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-ini).toFixed(2)}"><title>${esc(g.nome)}: ${brl(g.valor)} (${pctDe(g.valor, total)})</title></circle>`;
+      const a = `<circle class="fin-g-fatia" data-g="${i}" data-v="${esc(centro(g.valor))}" data-p="${pctDe(g.valor, total)}" r="${R}" cx="60" cy="60" stroke="${cor(i)}" stroke-dasharray="${Math.max(0, len - gap).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-ini).toFixed(2)}"><title>${esc(g.nome)}: ${brl(g.valor)} (${pctDe(g.valor, total)})</title></circle>`;
       ini += len;
-      return { ...g, cor, arco };
+      return a;
     });
-    return `<div class="fin-ganhos">
-      <p class="fin-ganhos-tit">Ganhos do mês</p>
-      <div class="fin-ganhos-corpo">
-        <svg class="fin-pizza" viewBox="0 0 120 120" role="img" aria-label="Ganhos do mês por cliente">
-          <g transform="rotate(-90 60 60)">${fatias.map((f) => f.arco).join('')}</g>
-          <text x="60" y="57" class="fin-pizza-v">${esc(total >= 10000 ? `R$ ${(total / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : brlCurto(total))}</text>
-          <text x="60" y="73" class="fin-pizza-l">no mês</text>
+    return `<div class="fin-ganhos fin-${tipo}">
+      <p class="fin-ganhos-tit">${P.tit}</p>
+      <div class="fin-ganhos-corpo" data-pizza>
+        <svg class="fin-pizza" viewBox="0 0 120 120" role="img" aria-label="${P.aria}">
+          <g transform="rotate(-90 60 60)">${arcos.join('')}</g>
+          <text x="60" y="57" class="fin-pizza-v" data-total="${esc(centro(total))}">${esc(centro(total))}</text>
+          <text x="60" y="73" class="fin-pizza-l" data-total="no mês">no mês</text>
         </svg>
-        <ul class="fin-ganhos-lista">${todos
-          .map((g, i) => {
-            return `<li data-g="${i}"><span class="fin-g-cor" style="background:${corG(i)}"></span>
-            <span class="fin-g-nome">${esc(g.nome)}${g.falta ? ` <small class="muted">${g.falta === g.valor ? 'a receber' : `${brl(g.falta)} a receber`}</small>` : ''}</span>
-            <strong>${brl(g.valor)}</strong><small class="muted fin-g-pct">${pctDe(g.valor, total)}</small></li>`;
-          })
+        <ul class="fin-ganhos-lista">${grupos
+          .map(
+            (g, i) => `<li data-g="${i}"><span class="fin-g-cor" style="background:${cor(i)}"></span>
+            <span class="fin-g-nome">${esc(g.nome)}${g.falta ? ` <small class="muted">${g.falta === g.valor ? P.falta : `${brl(g.falta)} ${P.falta}`}</small>` : ''}</span>
+            <strong>${brl(g.valor)}</strong><small class="muted fin-g-pct">${pctDe(g.valor, total)}</small></li>`,
+          )
           .join('')}</ul>
       </div>
-      ${falta ? `<p class="muted sm">Inclui ${brl(falta)} ainda a receber.</p>` : ''}
+      ${falta ? `<p class="muted sm">Inclui ${brl(falta)} ainda ${P.falta}.</p>` : ''}
     </div>`;
   }
   const pctDe = (v, total) => `${total ? Math.round((v * 100) / total) : 0}%`;
+  // Destaque da fatia: as outras apagam e o meio mostra o valor e a porcentagem dela.
+  function destacaPizza(corpo, i) {
+    corpo.querySelectorAll('.fin-g-fatia').forEach((f) => f.classList.toggle('apaga', i != null && f.dataset.g !== i));
+    corpo.querySelectorAll('.fin-ganhos-lista li').forEach((li) => li.classList.toggle('on', i != null && li.dataset.g === i));
+    const f = i != null && corpo.querySelector(`.fin-g-fatia[data-g="${i}"]`);
+    const [v, l] = corpo.querySelectorAll('.fin-pizza text');
+    v.textContent = f ? f.dataset.v : v.dataset.total;
+    l.textContent = f ? `${f.dataset.p} do mês` : l.dataset.total;
+  }
+  for (const ev of ['pointerover', 'pointerdown']) {
+    document.addEventListener(ev, (e) => {
+      const corpo = e.target.closest?.('[data-pizza]');
+      document.querySelectorAll('[data-pizza]').forEach((c) => c !== corpo && destacaPizza(c, null));
+      if (!corpo) return;
+      const alvo = e.target.closest('[data-g]');
+      destacaPizza(corpo, alvo ? alvo.dataset.g : null);
+    });
+  }
+  document.addEventListener('pointerout', (e) => {
+    const corpo = e.target.closest?.('[data-pizza]');
+    if (corpo && e.pointerType === 'mouse' && !corpo.contains(e.relatedTarget)) destacaPizza(corpo, null);
+  });
+
+  // Dinheiro emprestado direto no Resumo: botão de emprestar e a lista de quem deve.
+  function empBoxHTML() {
+    const ativos = F().emp.filter((e) => falta(e) > 0.004).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+    const quitados = F().emp.length - ativos.length;
+    const aReceber = r2(ativos.reduce((s, e) => s + falta(e), 0));
+    return `<div class="fin-ganhos fin-empbox">
+      <div class="fin-empbox-top">
+        <p class="fin-ganhos-tit">Dinheiro emprestado</p>
+        <button type="button" class="btn soft sm" data-action="fin-emp-novo">${icon('plus')}Emprestar</button>
+      </div>
+      ${
+        ativos.length
+          ? `<p class="muted sm">A receber: <strong>${brl(aReceber)}</strong></p>
+        <ul class="fin-emps fin-emps-mini">${ativos
+          .map(
+            (e) => `<li class="fin-emp">
+          <button type="button" class="grow" data-action="fin-emp-edit" data-id="${e.id}">
+            <span class="fin-emp-nome">${esc(e.nome)}</span>
+            <small class="muted">emprestou <span class="nw">${brl(e.valor)}</span>${recebido(e) ? ` · recebeu <span class="nw">${brl(recebido(e))}</span>` : ''}</small>
+          </button>
+          <strong class="nw">${brl(falta(e))}</strong>
+          <button type="button" class="btn soft sm" data-action="fin-abater" data-id="${e.id}">Abater</button>
+        </li>`,
+          )
+          .join('')}</ul>`
+          : '<p class="muted sm">Ninguém te deve agora.</p>'
+      }
+      ${quitados ? `<button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Quitados (${quitados})</button>` : ''}
+    </div>`;
+  }
 
   // ---------- Dinheiro emprestado ----------
   // Sai da conta quando você empresta e volta quando abate. Não conta como saída nem como entrada.
@@ -482,9 +539,8 @@ export function createFin(ctx) {
     if (!f.contaId) return toast('Escolha de qual conta saiu o dinheiro.');
     const data = { nome: f.nome.trim(), valor, contaId: f.contaId, data: f.data || U.todayStr(), obs: f.obs?.trim() || null };
     if (!form.dataset.id) Object.assign(data, { abat: [], criadoEm: Date.now() });
-    salvaDoc('emp', form.dataset.id, data);
     F().emp.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
-    openEmps();
+    salvaDoc('emp', form.dataset.id, data);
   }
   // Abater: abre com o que falta; mude o valor se recebeu só uma parte.
   function openAbater(e) {
@@ -498,7 +554,7 @@ export function createFin(ctx) {
       <label class="field"><span>Data</span><input type="date" name="data" value="${U.todayStr()}"></label>
       <p class="hint">Volta para a conta sem contar como entrada.</p>
       <footer class="modal-actions"><span class="grow"></span>
-        <button type="button" class="btn ghost" data-action="fin-emps">Cancelar</button>
+        <button type="button" class="btn ghost" data-action="close-modal">Cancelar</button>
         <button type="submit" class="btn primary">Abater</button></footer>
     </form>`);
   }
@@ -512,15 +568,10 @@ export function createFin(ctx) {
     e.abat = [...(e.abat || []), { data: f.data || U.todayStr(), valor, contaId: f.contaId || e.contaId }];
     persist(db.update(COLS.emp, e.id, { abat: e.abat }));
     toast(falta(e) > 0.004 ? `Abatido ${brl(valor)}. Falta ${brl(falta(e))}.` : `${e.nome} quitou tudo.`);
+    closeModal();
     render();
-    openEmps();
   }
 
-  // Saldo por categoria: abre numa janela, para não empurrar os cartões para baixo.
-  function categoriasDoMes(sai, ent) {
-    if (!sai.length && !ent.length) return '';
-    return `<button type="button" class="fin-cats-btn" data-action="fin-cats-mes">${icon('right')}Por categoria</button>`;
-  }
   function openCatsMes() {
     const mes = doMes(S.finMes).filter((t) => t.contaId || t.cartaoId);
     const por = new Map();
