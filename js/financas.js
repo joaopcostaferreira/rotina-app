@@ -343,10 +343,9 @@ export function createFin(ctx) {
         ${Math.abs(resPrev - res) > 0.004 ? `<p class="muted sm">Previsto até o fim do mês: <strong>${comSinal(resPrev)}</strong></p>` : ''}
         ${pizzaHTML('ganhos', ent)}
         ${pizzaHTML('gastos', sai)}
-        ${empBoxHTML()}
       </section>
 
-      ${semanaHTML()}
+      ${empBoxHTML()}
 
       ${fluxoHTML()}
     </div>`;
@@ -437,9 +436,9 @@ export function createFin(ctx) {
     const ativos = F().emp.filter((e) => falta(e) > 0.004).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
     const quitados = F().emp.length - ativos.length;
     const aReceber = r2(ativos.reduce((s, e) => s + falta(e), 0));
-    return `<div class="fin-ganhos fin-empbox">
+    return `<section class="card fin-empbox">
       <div class="fin-empbox-top">
-        <p class="fin-ganhos-tit">Dinheiro emprestado</p>
+        <h2 class="card-title">${icon('financas')}Dinheiro emprestado</h2>
         <button type="button" class="btn soft sm" data-action="fin-emp-novo">${icon('plus')}Emprestar</button>
       </div>
       ${
@@ -459,17 +458,17 @@ export function createFin(ctx) {
           .join('')}</ul>`
           : '<p class="muted sm">Ninguém te deve agora.</p>'
       }
-      ${quitados ? `<button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Quitados (${quitados})</button>` : ''}
-    </div>`;
+      ${quitados ? `<button type="button" class="fin-cats-btn" data-action="fin-quitados">${icon('right')}Quitados (${quitados})</button>` : ''}
+    </section>`;
   }
 
   // ---------- Dinheiro emprestado ----------
   // Sai da conta quando você empresta e volta quando abate. Não conta como saída nem como entrada.
   const recebido = (e) => r2((e.abat || []).reduce((s, a) => s + a.valor, 0));
   const falta = (e) => Math.max(0, r2(e.valor - recebido(e)));
-  function openEmps() {
+  function openEmps(soQuitados = false) {
     const ativos = F().emp.filter((e) => falta(e) > 0.004);
-    const quitados = F().emp.filter((e) => falta(e) <= 0.004);
+    const quitados = F().emp.filter((e) => falta(e) <= 0.004).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
     // Data com o ano quando não é deste ano; valores sem quebrar no meio ("R$" de um lado e o número do outro).
     const quando = (d) => (d ? (d.slice(0, 4) === U.todayStr().slice(0, 4) ? diaMes(d) : `${diaMes(d)}/${d.slice(0, 4)}`) : '—');
     const v = (x) => `<span class="nw">${brl(x)}</span>`;
@@ -488,6 +487,13 @@ export function createFin(ctx) {
       <button type="button" class="btn soft sm" data-action="fin-abater" data-id="${e.id}">Abater</button>`}
     </li>`;
     };
+    if (soQuitados) {
+      return openModal(`<div class="modal-body fin-form">
+      ${modalHead(`Quitados (${quitados.length})`)}
+      <p class="hint">Quem já te pagou tudo. Toque no nome para ver os detalhes.</p>
+      ${quitados.length ? `<ul class="fin-emps">${quitados.map(linha).join('')}</ul>` : '<p class="muted sm">Ninguém quitou ainda.</p>'}
+    </div>`);
+    }
     openModal(`<div class="modal-body fin-form">
       ${modalHead('Dinheiro emprestado')}
       <p class="muted sm">A receber</p>
@@ -650,9 +656,10 @@ export function createFin(ctx) {
     </section>`;
   }
 
-  // Balanço mensal: 5 meses antes até 6 depois do mês aberto, com o saldo no fim de cada mês.
+  // Balanço mensal: janeiro a dezembro do ano do mês aberto, com o saldo no fim de cada mês.
   function fluxoHTML() {
-    const meses = Array.from({ length: 12 }, (_, i) => U.addMonths(S.finMes, i - 5));
+    const ano = S.finMes.slice(0, 4);
+    const meses = Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, '0')}`);
     const comConta = F().tx.filter((t) => t.contaId);
     const sal = saldos();
     const hojeTotal = Object.values(sal).reduce((s, v) => s + v, 0);
@@ -675,7 +682,7 @@ export function createFin(ctx) {
     });
     const max = Math.max(...linhas.map((l) => Math.max(l.e, l.s)), 1);
     return `<section class="card fin-fluxo">
-      <h2 class="card-title">${icon('rotina')}Balanço mensal</h2>
+      <h2 class="card-title">${icon('rotina')}Balanço mensal · ${ano}</h2>
       <div class="fluxo">
         <div class="fluxo-row fluxo-head muted sm"><span>Mês</span><span>Entradas</span><span>Saídas</span><span>Saldo no fim</span></div>
         ${linhas
@@ -1943,6 +1950,7 @@ export function createFin(ctx) {
     },
     'fin-cats-mes': () => openCatsMes(),
     'fin-emps': () => openEmps(),
+    'fin-quitados': () => openEmps(true),
     'fin-emp-novo': () => (F().contas.length ? openEmp({ contaId: F().contas.find((c) => !c.arquivada)?.id }) : toast('Cadastre antes uma conta.')),
     'fin-emp-edit': ({ id }) => openEmp(achar('emp', id) || {}),
     'fin-abater': ({ id }) => {

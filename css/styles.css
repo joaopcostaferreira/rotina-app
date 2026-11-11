@@ -4743,3 +4743,12 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
   .fin-emps-mini .fin-emp > button.grow { flex-basis: 100%; }
   .fin-emps-mini .fin-emp > strong { flex: 1; }
 }
+
+/* ---------- v26: Dinheiro emprestado em faixa de fora a fora ---------- */
+.fin-empbox { grid-column: 1 / -1; }
+.fin-empbox-top .card-title { margin: 0; }
+.fin-emps-mini { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); column-gap: 28px; }
+.fin-emps-mini .fin-emp { border-top: 0; border-bottom: 1px solid var(--border); }
+@media (max-width: 420px) {
+  .fin-emps-mini { grid-template-columns: minmax(0, 1fr); }
+}
