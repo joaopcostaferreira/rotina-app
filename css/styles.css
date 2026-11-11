@@ -4482,16 +4482,18 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 }
 .fin-ganhos { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); container-type: inline-size; }
 .fin-ganhos-tit { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
-.fin-ganhos-corpo { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px; align-items: center; }
-.fin-pizza { width: 124px; height: 124px; display: block; }
+.fin-ganhos-corpo { display: grid; grid-template-columns: 168px minmax(0, max-content); gap: 22px; align-items: center; }
+.fin-pizza { width: 168px; height: 168px; display: block; }
 .fin-g-fatia { fill: none; stroke-width: 18; transition: opacity 0.15s; cursor: default; }
 .fin-pizza:hover .fin-g-fatia { opacity: 0.35; }
 .fin-pizza .fin-g-fatia:hover { opacity: 1; }
 .fin-pizza-v { fill: var(--text); font-size: 13px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
 .fin-pizza-l { fill: var(--muted); font-size: 10px; text-anchor: middle; }
-.fin-ganhos-lista { list-style: none; margin: 0; padding: 0; font-size: 14px; }
-.fin-ganhos-lista li { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
-.fin-ganhos-lista .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-ganhos-lista { list-style: none; margin: 0; padding: 0; font-size: 14px; display: grid; grid-template-columns: 10px minmax(0, auto) auto auto; column-gap: 10px; align-items: center; }
+.fin-ganhos-lista li { display: contents; }
+.fin-ganhos-lista li > * { padding: 5px 0; }
+.fin-ganhos-lista .fin-g-cor { padding: 0; }
+.fin-g-nome { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fin-ganhos-lista strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fin-g-cor { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 .fin-g-pct { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -4506,9 +4508,10 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
   .fin-ganhos-lista { width: 100%; }
 }
 /* Cartão estreito: a lista vai para baixo da pizza, para os nomes caberem. */
-@container (max-width: 380px) {
+@container (max-width: 400px) {
   .fin-ganhos-corpo { grid-template-columns: 1fr; justify-items: center; }
-  .fin-ganhos-lista { width: 100%; }
+  .fin-ganhos-lista { width: 100%; grid-template-columns: 10px minmax(0, 1fr) auto auto; }
+  .fin-g-nome { max-width: none; }
 }
 
 /* ---------- v19: diário em lista, aniversários, calculadora ---------- */
@@ -4578,3 +4581,23 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .aniv-item.hoje .aniv-data { background: var(--accent); color: #fff; }
 .aniv-item.hoje .aniv-data small { color: #fff; }
 .aniv-vazio { margin: 0; }
+
+/* Celular: a barra de baixo tem todas as telas e arrasta para o lado (sem os três pontinhos). */
+@media (max-width: 899px) {
+  .tabbar { display: flex; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tabbar .nav-link { flex: 0 0 calc((100vw - 8px) / 5.4); scroll-snap-align: start; white-space: nowrap; }
+}
+
+/* Aniversários por ano e mês */
+.aniv-ano { display: grid; gap: 12px; }
+.aniv-ano + .aniv-ano { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--border); }
+.aniv-ano-tit { margin: 0; font-size: 20px; font-weight: 700; }
+.aniv-mes { display: grid; gap: 6px; }
+.aniv-mes-tit { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.aniv-data strong { font-size: 19px; }
+
+/* Celular: botões do cabeçalho com texto curto ("+ Novo"), para não passar da margem. */
+@media (max-width: 520px) {
+  .so-largo { display: none; }
+}
