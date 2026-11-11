@@ -494,7 +494,14 @@ function render() {
     if (on) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  $('[data-action="more"]')?.classList.toggle('active', !TABS.includes(r));
+  // Celular: a barra de baixo arrasta; deixa a tela aberta à vista.
+  const bar = $('.tabbar');
+  const on = bar?.querySelector('.nav-link.active');
+  if (on && bar.scrollWidth > bar.clientWidth) {
+    const b = bar.getBoundingClientRect();
+    const o = on.getBoundingClientRect();
+    if (o.left < b.left || o.right > b.right) bar.scrollLeft += o.left - b.left - (b.width - o.width) / 2;
+  }
 
   if (r === 'diario' && lastRoute !== 'diario') S.diarioDate = null;
   const view = $('#view');
@@ -537,15 +544,7 @@ function shellHTML() {
       ${isDemo ? `<div class="demo-banner">${icon('sparkle')}<span>Modo demonstração: os dados ficam só neste navegador.</span><a href="#/ajustes">Ativar login Google</a></div>` : ''}
       <div id="view" class="view"></div>
     </main>
-    <nav class="tabbar" aria-label="Principal">
-      ${TABS.map((id) => link(NAV.find((n) => n.id === id))).join('')}
-      <button type="button" class="nav-link" data-action="more">${icon('mais')}<span>Mais</span></button>
-    </nav>
-    <div class="sheet" id="more">
-      <div class="sheet-panel">
-        ${navItems().filter((n) => !TABS.includes(n.id)).map(link).join('')}
-      </div>
-    </div>
+    <nav class="tabbar" aria-label="Principal">${navItems().map(link).join('')}</nav>
   </div>`;
 }
 
@@ -2005,7 +2004,7 @@ function viewDiario() {
     return `
   <header class="page-head">
     <div><p class="eyebrow">Diário · Hoje · ${agoraHTML()}</p><h1>Anotações</h1></div>
-    <div class="head-btns"><button type="button" class="btn primary" data-action="diario-novo">${icon('plus')}<span>Nova anotação</span></button></div>
+    <div class="head-btns"><button type="button" class="btn primary" data-action="diario-novo">${icon('plus')}<span>Nova<span class="so-largo"> anotação</span></span></button></div>
   </header>
   <section class="card journal-index">
     ${busca}

@@ -1,7 +1,6 @@
 // Aniversários (lista com quantos dias faltam) e calculadora rápida.
 
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
-const MES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const SEMANA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 
 export function createExtras(ctx) {
@@ -29,7 +28,7 @@ export function createExtras(ctx) {
     const p = proxima(a);
     const sub = [p.idade ? `faz ${p.idade} anos` : '', p.dias ? SEMANA[p.d.getDay()] : '', a.obs || ''].filter(Boolean).join(' · ');
     return `<li><button type="button" class="aniv-item${p.dias === 0 ? ' hoje' : p.dias <= 7 ? ' perto' : ''}" data-action="aniv-edit" data-id="${a.id}">
-      <span class="aniv-data"><strong>${a.dia}</strong><small>${MES_CURTO[a.mes - 1]}</small></span>
+      <span class="aniv-data"><strong>${p.d.getDate()}</strong></span>
       <span class="aniv-nome"><strong>${esc(a.nome)}</strong>${sub ? `<small class="muted">${esc(sub)}</small>` : ''}</span>
       <span class="aniv-falta">${p.dias === 0 ? icon('aniversarios') : ''}${faltaTxt(p.dias)}</span>
     </button></li>`;
@@ -42,27 +41,33 @@ export function createExtras(ctx) {
       .map((a) => ({ a, p: proxima(a) }))
       .sort((x, y) => x.p.dias - y.p.dias || x.a.nome.localeCompare(y.a.nome, 'pt-BR'));
     if (!lista.length) return `<p class="muted sm aniv-vazio">${q ? 'Ninguém com esse nome.' : 'Nenhum aniversário ainda.'}</p>`;
-    const grupos = [
-      ['Hoje', (d) => d === 0],
-      ['Próximos 7 dias', (d) => d > 0 && d <= 7],
-      ['Próximos 30 dias', (d) => d > 7 && d <= 30],
-      ['Mais para frente', (d) => d > 30],
-    ];
-    return grupos
-      .map(([tit, f]) => {
-        const g = lista.filter((x) => f(x.p.dias));
-        return g.length
-          ? `<section class="aniv-grupo"><h2 class="aniv-tit">${tit}<span class="count">${g.length}</span></h2>
-             <ul class="aniv-lista">${g.map((x) => linhaAniv(x.a)).join('')}</ul></section>`
-          : '';
-      })
+    // Por ano e mês, na ordem em que vão acontecer (o que já passou neste ano vai para o ano que vem).
+    const anos = new Map();
+    for (const x of lista) {
+      const y = x.p.d.getFullYear();
+      const m = x.p.d.getMonth();
+      if (!anos.has(y)) anos.set(y, new Map());
+      const meses = anos.get(y);
+      if (!meses.has(m)) meses.set(m, []);
+      meses.get(m).push(x);
+    }
+    return [...anos]
+      .map(
+        ([y, meses]) => `<section class="aniv-ano"><h2 class="aniv-ano-tit">${y}</h2>
+        ${[...meses]
+          .map(
+            ([m, g]) => `<div class="aniv-mes"><h3 class="aniv-mes-tit">${U.cap(MESES[m])}<span class="count">${g.length}</span></h3>
+            <ul class="aniv-lista">${g.map((x) => linhaAniv(x.a)).join('')}</ul></div>`,
+          )
+          .join('')}</section>`,
+      )
       .join('');
   }
 
   function view() {
     const head = `<header class="page-head">
       <div><p class="eyebrow">Pessoas · ${agora()}</p><h1>Aniversários</h1></div>
-      <div class="head-btns"><button type="button" class="btn primary" data-action="aniv-new">${icon('plus')}<span>Novo aniversário</span></button></div>
+      <div class="head-btns"><button type="button" class="btn primary" data-action="aniv-new">${icon('plus')}<span>Novo<span class="so-largo"> aniversário</span></span></button></div>
     </header>`;
     if (!S.anivs) {
       db.list('aniversarios')

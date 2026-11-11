@@ -321,8 +321,7 @@ export function createFin(ctx) {
 
     return `<div class="fin-grid">
       <section class="card fin-saldo">
-        <div class="fin-saldo-top"><p class="muted sm">Saldo total</p>
-          <button type="button" class="btn ghost sm" data-action="calc-open">${icon('calc')}Calculadora</button></div>
+        <p class="muted sm">Saldo total</p>
         <p class="fin-big ${total < 0 ? 'neg' : ''}">${brl(total)}</p>
         <p class="muted sm">Previsto no fim de ${esc(mesCurto(ym))}: <strong>${brl(previsto)}</strong></p>
         ${aReceber ? `<p class="muted sm">Emprestado, a receber: <strong>${brl(aReceber)}</strong></p>` : ''}
@@ -336,9 +335,9 @@ export function createFin(ctx) {
           ${kpi('Saídas', soma(sai.filter((t) => t.realizado)), soma(sai), 'out')}
           ${kpi('Resultado', r2(soma(ent.filter((t) => t.realizado)) - soma(sai.filter((t) => t.realizado))), r2(soma(ent) - soma(sai)), 'res')}
         </div>
-        ${ganhosHTML(ent)}
         <div class="fin-mes-btns">${categoriasDoMes(sai, ent)}
           <button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Dinheiro emprestado${aReceber ? ` · ${brl(aReceber)}` : ''}</button></div>
+        ${ganhosHTML(ent)}
       </section>
 
       ${F().cartoes.length ? `<section class="card fin-cartoes"><h2 class="card-title">${icon('cartao')}Cartões</h2>${F().cartoes.map(cartaoCard).join('')}</section>` : ''}
@@ -357,7 +356,8 @@ export function createFin(ctx) {
   }
 
   // ---------- Ganhos do mês: quanto veio de cada cliente ----------
-  // Entrada com cliente vai para o cliente; sem cliente, para a descrição. Até 5 fatias + "Outros".
+  // Entrada com cliente vai para o cliente; sem cliente, para a descrição.
+  // A lista mostra todos os clientes. A pizza tem até 6 fatias: do 6º cliente em diante, eles dividem a última.
   function ganhosHTML(ent) {
     if (!ent.length) return '';
     const por = new Map();
@@ -369,13 +369,13 @@ export function createFin(ctx) {
       if (!t.realizado) g.falta = r2(g.falta + t.valor);
       por.set(nome, g);
     }
-    let grupos = [...por.values()].sort((a, b) => b.valor - a.valor);
-    if (grupos.length > 6) {
-      const resto = grupos.slice(5);
-      grupos = [...grupos.slice(0, 5), { nome: `Outros (${resto.length})`, valor: soma(resto), falta: r2(resto.reduce((s, g) => s + g.falta, 0)), outros: true }];
-    }
+    const todos = [...por.values()].sort((a, b) => b.valor - a.valor);
+    const juntos = todos.length > 6 ? todos.slice(5) : [];
+    const grupos = juntos.length
+      ? [...todos.slice(0, 5), { nome: juntos.map((g) => g.nome).join(', '), valor: soma(juntos), falta: 0 }]
+      : todos;
     const total = soma(grupos);
-    const falta = r2(grupos.reduce((s, g) => s + g.falta, 0));
+    const falta = r2(todos.reduce((s, g) => s + g.falta, 0));
     const R = 48;
     const C = 2 * Math.PI * R;
     const gap = grupos.length > 1 ? 2 : 0;
@@ -395,12 +395,13 @@ export function createFin(ctx) {
           <text x="60" y="57" class="fin-pizza-v">${esc(total >= 10000 ? `R$ ${(total / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : brlCurto(total))}</text>
           <text x="60" y="73" class="fin-pizza-l">no mês</text>
         </svg>
-        <ul class="fin-ganhos-lista">${fatias
-          .map(
-            (f, i) => `<li data-g="${i}"><span class="fin-g-cor" style="background:${f.cor}"></span>
-            <span class="grow">${esc(f.nome)}${f.falta ? ` <small class="muted">${f.falta === f.valor ? 'a receber' : `${brl(f.falta)} a receber`}</small>` : ''}</span>
-            <strong>${brl(f.valor)}</strong><small class="muted fin-g-pct">${pctDe(f.valor, total)}</small></li>`,
-          )
+        <ul class="fin-ganhos-lista">${todos
+          .map((g, i) => {
+            const n = Math.min(i, 5);
+            return `<li data-g="${n}"><span class="fin-g-cor" style="background:var(--g${n + 1})"></span>
+            <span class="fin-g-nome">${esc(g.nome)}${g.falta ? ` <small class="muted">${g.falta === g.valor ? 'a receber' : `${brl(g.falta)} a receber`}</small>` : ''}</span>
+            <strong>${brl(g.valor)}</strong><small class="muted fin-g-pct">${pctDe(g.valor, total)}</small></li>`;
+          })
           .join('')}</ul>
       </div>
       ${falta ? `<p class="muted sm">Inclui ${brl(falta)} ainda a receber.</p>` : ''}
