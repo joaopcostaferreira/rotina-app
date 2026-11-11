@@ -13,6 +13,7 @@ import {
 import * as U from './utils.js';
 import { icon, LOGO, GOOGLE } from './icons.js';
 import { createFin } from './financas.js';
+import { createExtras } from './extras.js';
 
 const { esc } = U;
 
@@ -62,7 +63,7 @@ const S = {
   relPeriodo: 'semana', // Relatórios: 'hoje' | 'semana' | 'mes'
   relMes: U.todayStr().slice(0, 7),
   pedirConclusao: null, // tarefa pausada em Hoje: mostra o ✓ "Finalizou?" ao lado do cronômetro
-  diarioDate: U.todayStr(), // dia aberto no Diário
+  diarioDate: null, // dia aberto no Diário (null = lista de anotações)
   journal: null, // entradas do Diário (data -> { texto })
   journalBusca: '',
   lastToday: U.todayStr(),
@@ -75,14 +76,15 @@ const S = {
 const pending = { days: {}, ranges: {} };
 
 const NAV = [
+  { id: 'financas', label: 'Finanças', fin: true },
   { id: 'painel', label: 'Painel' },
   { id: 'hoje', label: 'Hoje' },
   { id: 'calendario', label: 'Calendário' },
   { id: 'diario', label: 'Diário' },
   { id: 'rotina', label: 'Rotina' },
   { id: 'clientes', label: 'Clientes' },
-  { id: 'financas', label: 'Finanças', fin: true },
   { id: 'relatorios', label: 'Relatórios' },
+  { id: 'aniversarios', label: 'Aniversários' },
   { id: 'categorias', label: 'Categorias' },
   { id: 'ajustes', label: 'Ajustes' },
   { id: 'acessos', label: 'Acessos', admin: true },
@@ -356,7 +358,7 @@ function resetState() {
     blocked: false,
     isAdmin: false,
     acessos: null,
-    diarioDate: U.todayStr(),
+    diarioDate: null,
     journal: null,
     journalBusca: '',
   });
@@ -481,7 +483,7 @@ function render() {
     return;
   }
   if (!$('.app', root)) {
-    TABS = finOK() ? ['hoje', 'calendario', 'painel', 'financas', 'diario'] : TABS_BASE;
+    TABS = finOK() ? ['financas', 'painel', 'hoje', 'calendario', 'diario'] : TABS_BASE;
     root.innerHTML = shellHTML();
   }
 
@@ -494,6 +496,7 @@ function render() {
   });
   $('[data-action="more"]')?.classList.toggle('active', !TABS.includes(r));
 
+  if (r === 'diario' && lastRoute !== 'diario') S.diarioDate = null;
   const view = $('#view');
   view.innerHTML = VIEWS[r]();
   document.title = `${navLabel(r)} · Segundo Cérebro`;
@@ -586,7 +589,7 @@ function dayNav(date) {
   return `<div class="daynav">
     <button type="button" class="icon-btn" data-action="day-shift" data-n="-1" aria-label="Dia anterior">${icon('left')}</button>
     <div class="daynav-title">
-      <span class="eyebrow">${esc(U.relativo(date))}${isToday ? ` · ${clockHTML()}` : ''}</span>
+      <span class="eyebrow">${esc(U.relativo(date))}${isToday ? ` · ${clockHTML()}` : ` · hoje é ${agoraHTML()}`}</span>
       <h1>${esc(U.fmtDiaLongo(date))}</h1>
     </div>
     <button type="button" class="icon-btn" data-action="day-shift" data-n="1" aria-label="Próximo dia">${icon('right')}</button>
@@ -858,6 +861,8 @@ function viewPainel() {
 
 // Relógio no horário de Brasília (atualizado a cada segundo pelo mesmo intervalo dos cronômetros).
 const clockHTML = () => `<span class="clock" data-clock>${U.horaBR()}</span>`;
+// "Quarta-feira, 11 de novembro · 14:32": o dia e a hora no alto de todas as telas.
+const agoraHTML = () => `<span data-hoje>${esc(U.fmtDiaLongo(U.todayStr()))}</span> · ${clockHTML()}`;
 
 // Hoje: a agenda do dia com os horários. Em cada bloco: ✓ concluir, cronômetro (play/pausa) e notas.
 // As horas com tarefa ficam altas (cabem os botões) e as horas vazias ficam baixinhas.
@@ -1039,7 +1044,7 @@ function viewCalendario() {
   <header class="page-head">
     <div class="daynav">
       <button type="button" class="icon-btn" data-action="cal-shift" data-n="-1" aria-label="Mês anterior">${icon('left')}</button>
-      <div class="daynav-title"><span class="eyebrow">Calendário</span><h1>${esc(U.fmtMes(S.calMonth))}</h1></div>
+      <div class="daynav-title"><span class="eyebrow">Calendário · ${agoraHTML()}</span><h1>${esc(U.fmtMes(S.calMonth))}</h1></div>
       <button type="button" class="icon-btn" data-action="cal-shift" data-n="1" aria-label="Próximo mês">${icon('right')}</button>
       ${S.calMonth !== today.slice(0, 7) || S.calSel !== today ? '<button type="button" class="btn ghost sm" data-action="cal-today">Hoje</button>' : ''}
     </div>
@@ -1089,7 +1094,7 @@ function viewRotina() {
 
   return `
   <header class="page-head">
-    <div><p class="eyebrow">Tarefas fixas</p><h1>Rotina</h1></div>
+    <div><p class="eyebrow">Tarefas fixas · ${agoraHTML()}</p><h1>Rotina</h1></div>
     <button type="button" class="btn primary" data-action="new-rec">${icon('plus')}<span>Tarefa fixa</span></button>
   </header>
   <p class="muted intro">Estas tarefas se repetem toda semana (ou todo mês) e aparecem sozinhas na lista de cada dia. Para mudar só um dia específico, use o <a href="#/calendario">calendário</a>.</p>
@@ -1166,7 +1171,7 @@ function viewClientes() {
 
   return `
   <header class="page-head">
-    <div><p class="eyebrow">Trabalho</p><h1>Clientes</h1></div>
+    <div><p class="eyebrow">Trabalho · ${agoraHTML()}</p><h1>Clientes</h1></div>
     <button type="button" class="btn primary" data-action="new-client">${icon('plus')}<span>Cliente</span></button>
   </header>
   ${
@@ -1199,7 +1204,7 @@ function viewCategorias() {
     .join('');
   return `
   <header class="page-head">
-    <div><p class="eyebrow">Cadastros</p><h1>Categorias</h1></div>
+    <div><p class="eyebrow">Cadastros · ${agoraHTML()}</p><h1>Categorias</h1></div>
     <button type="button" class="btn primary" data-action="new-cat">${icon('plus')}<span>Categoria</span></button>
   </header>
   <p class="muted intro">A ordem aqui é a ordem em que as categorias aparecem na lista do dia. Uma categoria pode ter a própria lista (ex.: Cursos → Inglês, Fotografia), que ganha o ▶ no Painel.</p>
@@ -1217,7 +1222,7 @@ function viewAjustes() {
     `<label class="seg-opt"><input type="radio" name="tema" value="${val}" ${p.tema === val ? 'checked' : ''}><span>${label}</span></label>`;
 
   return `
-  <header class="page-head"><div><p class="eyebrow">Sua conta</p><h1>Ajustes</h1></div></header>
+  <header class="page-head"><div><p class="eyebrow">Sua conta · ${agoraHTML()}</p><h1>Ajustes</h1></div></header>
   <div class="settings" data-settings>
     <section class="card">
       <h2 class="card-title">Perfil</h2>
@@ -1685,7 +1690,7 @@ function viewRelatorios() {
   <header class="page-head">
     <div class="daynav">
       ${mes ? `<button type="button" class="icon-btn" data-action="rel-mes" data-n="-1" aria-label="Mês anterior">${icon('left')}</button>` : ''}
-      <div class="daynav-title"><span class="eyebrow">Relatórios</span><h1>${esc(label)}</h1></div>
+      <div class="daynav-title"><span class="eyebrow">Relatórios · ${agoraHTML()}</span><h1>${esc(label)}</h1></div>
       ${mes && S.relMes < today.slice(0, 7) ? `<button type="button" class="icon-btn" data-action="rel-mes" data-n="1" aria-label="Próximo mês">${icon('right')}</button>` : ''}
     </div>
   </header>
@@ -1950,23 +1955,34 @@ document.addEventListener('pointerover', relHover);
 
 const palavras = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
 
+// Nome da anotação: a primeira linha do texto (curta).
+const journalTitulo = (txt) => {
+  const l = txt.trim().split('\n')[0].trim();
+  return l.length > 70 ? `${l.slice(0, 68).trimEnd()}…` : l;
+};
+
 function journalListHTML() {
   const q = (S.journalBusca || '').trim().toLowerCase();
   const entries = Object.values(S.journal || {})
     .filter((e) => e.texto?.trim() && (!q || e.texto.toLowerCase().includes(q)))
     .sort((a, b) => b.id.localeCompare(a.id));
-  if (!entries.length) return `<p class="muted sm">${q ? 'Nada encontrado.' : 'Suas anotações aparecem aqui.'}</p>`;
+  if (!entries.length) return `<p class="muted sm journal-vazio">${q ? 'Nada encontrado.' : 'Suas anotações aparecem aqui. Toque em “Nova anotação” para escrever a de hoje.'}</p>`;
   return entries
     .map((e) => {
       const txt = e.texto.trim();
-      // Trecho do texto: o começo, ou em volta da palavra buscada.
-      const i = q ? txt.toLowerCase().indexOf(q) : 0;
+      const titulo = journalTitulo(txt);
+      // Trecho: o que vem depois do nome, ou em volta da palavra buscada.
+      const resto = txt.slice(txt.split('\n')[0].length).trim();
+      const base = q && !resto.toLowerCase().includes(q) ? txt : resto;
+      const i = q ? Math.max(0, base.toLowerCase().indexOf(q)) : 0;
       const from = Math.max(0, i - 40);
-      const to = from + 110;
-      const snippet = (from > 0 ? '…' : '') + txt.slice(from, to) + (to < txt.length ? '…' : '');
+      const to = from + 120;
+      const snippet = base ? (from > 0 ? '…' : '') + base.slice(from, to) + (to < base.length ? '…' : '') : '';
+      const rel = U.relativo(e.id);
       return `<li><button type="button" class="journal-item${e.id === S.diarioDate ? ' on' : ''}" data-action="diario-open" data-date="${e.id}">
-        <span class="journal-date">${esc(U.fmtDiaCurto(e.id))}</span>
-        <span class="journal-snippet">${esc(snippet)}</span></button></li>`;
+        <span class="journal-tit">${esc(titulo)}</span>
+        <span class="journal-date">${esc(U.fmtDiaCurto(e.id))}${/^(Hoje|Ontem)$/.test(rel) ? ` · ${rel}` : ''}</span>
+        ${snippet ? `<span class="journal-snippet">${esc(snippet)}</span>` : ''}</button></li>`;
     })
     .join('');
 }
@@ -1982,25 +1998,39 @@ function viewDiario() {
     return loading();
   }
   const d = S.diarioDate;
+  const busca = `<label class="journal-search">${icon('busca')}<input type="search" data-journal-search placeholder="Buscar no diário" value="${esc(S.journalBusca || '')}" aria-label="Buscar no diário"></label>`;
+  // Sem dia aberto: a lista de todas as anotações, mais novas primeiro.
+  if (!d) {
+    const n = Object.values(S.journal).filter((e) => e.texto?.trim()).length;
+    return `
+  <header class="page-head">
+    <div><p class="eyebrow">Diário · Hoje · ${agoraHTML()}</p><h1>Anotações</h1></div>
+    <div class="head-btns"><button type="button" class="btn primary" data-action="diario-novo">${icon('plus')}<span>Nova anotação</span></button></div>
+  </header>
+  <section class="card journal-index">
+    ${busca}
+    <p class="muted sm journal-conta">${n} anotaç${n === 1 ? 'ão' : 'ões'}</p>
+    <ul class="journal-list" id="journal-list">${journalListHTML()}</ul>
+  </section>`;
+  }
   const texto = S.journal[d]?.texto || '';
   const isToday = d === U.todayStr();
   return `
   <header class="page-head">
     <div class="daynav">
-      <button type="button" class="icon-btn" data-action="diario-shift" data-n="-1" aria-label="Dia anterior">${icon('left')}</button>
-      <div class="daynav-title"><span class="eyebrow">Diário · ${esc(U.relativo(d))}</span><h1>${esc(U.fmtDiaLongo(d))}</h1></div>
-      <button type="button" class="icon-btn" data-action="diario-shift" data-n="1" aria-label="Próximo dia">${icon('right')}</button>
-      ${isToday ? '' : '<button type="button" class="btn ghost sm" data-action="diario-today">Ir para hoje</button>'}
+      <button type="button" class="icon-btn" data-action="diario-lista" aria-label="Voltar para as anotações" title="Todas as anotações">${icon('left')}</button>
+      <div class="daynav-title"><span class="eyebrow">Diário · ${esc(U.relativo(d))} · ${isToday ? clockHTML() : `hoje é ${agoraHTML()}`}</span><h1>${esc(U.fmtDiaLongo(d))}</h1></div>
+      <button type="button" class="btn ghost sm" data-action="diario-lista">${icon('diario')}Todas as anotações</button>
     </div>
   </header>
   <div class="journal-layout">
     <section class="card journal-page">
       <textarea data-journal data-date="${d}" aria-label="Diário de ${esc(U.fmtDiaLongo(d))}"
-        placeholder="Escreva livremente: ideias, brainstorming, aprendizados, como foi o dia…">${esc(texto)}</textarea>
+        placeholder="A primeira linha vira o nome da anotação.&#10;Depois, escreva livremente: ideias, brainstorming, aprendizados, como foi o dia…">${esc(texto)}</textarea>
       <footer class="journal-foot"><span data-journal-count>${palavras(texto)} palavra${palavras(texto) === 1 ? '' : 's'}</span><span data-journal-status></span></footer>
     </section>
     <aside class="card journal-side">
-      <label class="journal-search">${icon('busca')}<input type="search" data-journal-search placeholder="Buscar no diário" value="${esc(S.journalBusca || '')}" aria-label="Buscar no diário"></label>
+      ${busca}
       <ul class="journal-list" id="journal-list">${journalListHTML()}</ul>
     </aside>
   </div>`;
@@ -2457,7 +2487,7 @@ function viewAcessos() {
     )
     .join('');
   return `
-  <header class="page-head"><div><p class="eyebrow">Administração</p><h1>Acessos</h1></div></header>
+  <header class="page-head"><div><p class="eyebrow">Administração · ${agoraHTML()}</p><h1>Acessos</h1></div></header>
   <p class="muted intro">Só os e-mails desta lista conseguem entrar no app. Cada pessoa continua vendo apenas os próprios dados. Esta lista fica guardada no Firebase e não aparece no GitHub.</p>
   <form class="card acc-form" data-form="acesso">
     <label class="field"><span>Liberar novo e-mail (conta Google)</span>
@@ -2665,6 +2695,7 @@ const VIEWS = {
   acessos: viewAcessos,
   diario: viewDiario,
   financas: () => FIN.view(),
+  aniversarios: () => EXTRAS.view(),
 };
 
 // ---------------------------------------------------------------------------
@@ -3372,6 +3403,22 @@ const ACTIONS = {
     S.diarioDate = U.todayStr();
     render();
   },
+  'diario-novo': () => {
+    flushSaves();
+    S.diarioDate = U.todayStr();
+    render();
+    window.scrollTo(0, 0);
+    const ta = $('[data-journal]');
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  },
+  'diario-lista': () => {
+    flushSaves();
+    S.diarioDate = null;
+    render();
+  },
   'diario-open': ({ date }) => {
     flushSaves();
     S.diarioDate = date;
@@ -3568,10 +3615,15 @@ const ACTIONS = {
 // Finanças (js/financas.js): ações e formulários próprios.
 const FIN = createFin({
   S, db, U, esc, icon, openModal, closeModal, toast, persist, render, ask, modalHead, modalFoot, isAtivo, norm, workCatId,
-  ensureRange, elapsed, visible,
+  ensureRange, elapsed, visible, agora: agoraHTML,
 });
 Object.assign(ACTIONS, FIN.ACTIONS);
 Object.assign(FORMS, FIN.FORMS);
+const EXTRAS = createExtras({
+  S, db, U, esc, icon, openModal, closeModal, toast, persist, render, ask, modalHead, modalFoot, norm, errMsg, loading, agora: agoraHTML,
+});
+Object.assign(ACTIONS, EXTRAS.ACTIONS);
+Object.assign(FORMS, EXTRAS.FORMS);
 
 // ---------------------------------------------------------------------------
 // Eventos globais
@@ -3733,6 +3785,10 @@ setInterval(() => {
   const hora = U.horaBR();
   document.querySelectorAll('[data-clock]').forEach((el) => {
     if (el.textContent !== hora) el.textContent = hora;
+  });
+  const dia = U.fmtDiaLongo(U.todayStr());
+  document.querySelectorAll('[data-hoje]').forEach((el) => {
+    if (el.textContent !== dia) el.textContent = dia;
   });
 }, 1000);
 

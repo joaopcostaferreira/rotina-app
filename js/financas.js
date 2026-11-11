@@ -225,7 +225,7 @@ export function createFin(ctx) {
   function view() {
     if (!S.fin) {
       load();
-      return `<header class="page-head"><div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div></header>
+      return `<header class="page-head"><div><p class="eyebrow">Dinheiro · ${ctx.agora()}</p><h1>Finanças</h1></div></header>
         <div class="loading"><span></span><span></span><span></span></div>`;
     }
     // No celular as abas rolam para o lado: deixa a aba aberta à vista depois de desenhar.
@@ -240,8 +240,9 @@ export function createFin(ctx) {
     const corpo = { resumo: resumoHTML, receitas: () => listaPage('receitas'), despesas: () => listaPage('despesas'), contas: contasHTML, estimativa: estimHTML, hora: horaHTML, extrato: extratoHTML, transf: transfHTML }[S.finTab] || resumoHTML;
     return `
     <header class="page-head fin-head">
-      <div><p class="eyebrow">Dinheiro</p><h1>Finanças</h1></div>
+      <div><p class="eyebrow">Dinheiro · ${ctx.agora()}</p><h1>Finanças</h1></div>
       <div class="fin-mes">
+        <button type="button" class="icon-btn fin-calc-btn" data-action="calc-open" aria-label="Abrir calculadora" title="Calculadora">${icon('calc')}</button>
         <button type="button" class="icon-btn" data-action="fin-mes" data-n="-1" aria-label="Mês anterior">${icon('left')}</button>
         <button type="button" class="fin-mes-nome" data-action="fin-mes" data-n="0" title="Voltar para este mês">${esc(U.fmtMes(S.finMes))}</button>
         <button type="button" class="icon-btn" data-action="fin-mes" data-n="1" aria-label="Próximo mês">${icon('right')}</button>
@@ -277,7 +278,9 @@ export function createFin(ctx) {
   };
   function txRow(t, { data = true, lancado = 0 } = {}) {
     // No cartão a "data" é o vencimento da fatura; o dia da compra aparece à parte.
-    const quando = t.cartaoId ? (t.dataCompra ? `compra ${diaMes(t.dataCompra)}` : '') : data ? diaMes(t.data) : '';
+    // Custo com vários gastos (ex.: Uber): mostra ao lado do nome até que dia já foi lançado.
+    const ultItem = t.itens?.length ? t.itens.reduce((m, x) => (x.data > m ? x.data : m), '') : '';
+    const quando = ultItem && t.cartaoId ? '' : t.cartaoId ? (t.dataCompra ? `compra ${diaMes(t.dataCompra)}` : '') : data ? diaMes(t.data) : '';
     const fat = t.cartaoId && data ? `fatura ${mesCurto(t.data.slice(0, 7))}` : '';
     const nItens = t.itens?.length > 1 ? `${t.itens.length} gastos` : '';
     const meta = [lancado ? `lançado ${horaDe(lancado)}` : '', quando, fat, catFin(t.catId)?.nome, nItens, ondeTxt(t), cliNome(t.clienteId), t.parcela ? `${t.parcela}/${t.parcelas}` : '']
@@ -288,7 +291,7 @@ export function createFin(ctx) {
     return `<li class="tx${t.realizado ? '' : ' prev'}" style="--c:${corDe(t)}">
       <button type="button" class="tx-check${t.realizado ? ' on' : ''}" data-action="fin-toggle" data-id="${t.id}" aria-label="${rotulo}" title="${rotulo}">${icon('check')}</button>
       <button type="button" class="tx-main" data-action="fin-edit-tx" data-id="${t.id}">
-        <span class="tx-nome">${esc(t.nome)}${t.realizado ? '' : ' <small class="chip tx-prev">previsto</small>'}</span>
+        <span class="tx-nome">${esc(t.nome)}${ultItem ? ` <small class="tx-ate" title="Último gasto lançado">até ${diaMes(ultItem)}</small>` : ''}${t.realizado ? '' : ' <small class="chip tx-prev">previsto</small>'}</span>
         <span class="tx-meta">${meta}</span>
       </button>
       <span class="tx-val ${t.tipo === 'entrada' ? 'in' : 'out'}">${t.tipo === 'entrada' ? '+' : '−'}${brl(t.valor)}</span>
@@ -318,7 +321,8 @@ export function createFin(ctx) {
 
     return `<div class="fin-grid">
       <section class="card fin-saldo">
-        <p class="muted sm">Saldo total</p>
+        <div class="fin-saldo-top"><p class="muted sm">Saldo total</p>
+          <button type="button" class="btn ghost sm" data-action="calc-open">${icon('calc')}Calculadora</button></div>
         <p class="fin-big ${total < 0 ? 'neg' : ''}">${brl(total)}</p>
         <p class="muted sm">Previsto no fim de ${esc(mesCurto(ym))}: <strong>${brl(previsto)}</strong></p>
         ${aReceber ? `<p class="muted sm">Emprestado, a receber: <strong>${brl(aReceber)}</strong></p>` : ''}
@@ -332,6 +336,7 @@ export function createFin(ctx) {
           ${kpi('Saídas', soma(sai.filter((t) => t.realizado)), soma(sai), 'out')}
           ${kpi('Resultado', r2(soma(ent.filter((t) => t.realizado)) - soma(sai.filter((t) => t.realizado))), r2(soma(ent) - soma(sai)), 'res')}
         </div>
+        ${ganhosHTML(ent)}
         <div class="fin-mes-btns">${categoriasDoMes(sai, ent)}
           <button type="button" class="fin-cats-btn" data-action="fin-emps">${icon('right')}Dinheiro emprestado${aReceber ? ` · ${brl(aReceber)}` : ''}</button></div>
       </section>
@@ -350,6 +355,58 @@ export function createFin(ctx) {
     return `<div class="kpi ${cls}${cls === 'res' && real < 0 ? ' neg' : ''}"><span class="muted sm">${rotulo}</span><strong>${v}</strong>
       ${Math.abs(prev - real) > 0.004 ? `<small class="muted">previsto ${p}</small>` : '<small class="muted">&nbsp;</small>'}</div>`;
   }
+
+  // ---------- Ganhos do mês: quanto veio de cada cliente ----------
+  // Entrada com cliente vai para o cliente; sem cliente, para a descrição. Até 5 fatias + "Outros".
+  function ganhosHTML(ent) {
+    if (!ent.length) return '';
+    const por = new Map();
+    for (const t of ent) {
+      const c = t.clienteId && cliById(t.clienteId);
+      const nome = c ? c.nome : (t.catId && catFin(t.catId)?.nome) || 'Sem cliente';
+      const g = por.get(nome) || { nome, valor: 0, falta: 0 };
+      g.valor = r2(g.valor + t.valor);
+      if (!t.realizado) g.falta = r2(g.falta + t.valor);
+      por.set(nome, g);
+    }
+    let grupos = [...por.values()].sort((a, b) => b.valor - a.valor);
+    if (grupos.length > 6) {
+      const resto = grupos.slice(5);
+      grupos = [...grupos.slice(0, 5), { nome: `Outros (${resto.length})`, valor: soma(resto), falta: r2(resto.reduce((s, g) => s + g.falta, 0)), outros: true }];
+    }
+    const total = soma(grupos);
+    const falta = r2(grupos.reduce((s, g) => s + g.falta, 0));
+    const R = 48;
+    const C = 2 * Math.PI * R;
+    const gap = grupos.length > 1 ? 2 : 0;
+    let ini = 0;
+    const fatias = grupos.map((g, i) => {
+      const len = total ? (g.valor / total) * C : 0;
+      const cor = `var(--g${i + 1})`;
+      const arco = `<circle class="fin-g-fatia" data-g="${i}" r="${R}" cx="60" cy="60" stroke="${cor}" stroke-dasharray="${Math.max(0, len - gap).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-ini).toFixed(2)}"><title>${esc(g.nome)}: ${brl(g.valor)} (${pctDe(g.valor, total)})</title></circle>`;
+      ini += len;
+      return { ...g, cor, arco };
+    });
+    return `<div class="fin-ganhos">
+      <p class="fin-ganhos-tit">Ganhos do mês</p>
+      <div class="fin-ganhos-corpo">
+        <svg class="fin-pizza" viewBox="0 0 120 120" role="img" aria-label="Ganhos do mês por cliente">
+          <g transform="rotate(-90 60 60)">${fatias.map((f) => f.arco).join('')}</g>
+          <text x="60" y="57" class="fin-pizza-v">${esc(total >= 10000 ? `R$ ${(total / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : brlCurto(total))}</text>
+          <text x="60" y="73" class="fin-pizza-l">no mês</text>
+        </svg>
+        <ul class="fin-ganhos-lista">${fatias
+          .map(
+            (f, i) => `<li data-g="${i}"><span class="fin-g-cor" style="background:${f.cor}"></span>
+            <span class="grow">${esc(f.nome)}${f.falta ? ` <small class="muted">${f.falta === f.valor ? 'a receber' : `${brl(f.falta)} a receber`}</small>` : ''}</span>
+            <strong>${brl(f.valor)}</strong><small class="muted fin-g-pct">${pctDe(f.valor, total)}</small></li>`,
+          )
+          .join('')}</ul>
+      </div>
+      ${falta ? `<p class="muted sm">Inclui ${brl(falta)} ainda a receber.</p>` : ''}
+    </div>`;
+  }
+  const pctDe = (v, total) => `${total ? Math.round((v * 100) / total) : 0}%`;
 
   // ---------- Dinheiro emprestado ----------
   // Sai da conta quando você empresta e volta quando abate. Não conta como saída nem como entrada.
@@ -1383,10 +1440,14 @@ export function createFin(ctx) {
     if (editing) modalDel('estim');
   }
 
-  function openAssin(e) {
+  // "volta": id do cartão quando veio da lista de assinaturas da fatura (mostra a seta para voltar).
+  function openAssin(e, volta = '') {
     const editing = !!e.id;
-    openModal(`<form class="modal-body fin-form" data-form="fin-assin" data-id="${e.id || ''}">
-      ${modalHead(editing ? 'Editar assinatura' : 'Nova assinatura')}
+    const seta = volta
+      ? `<button type="button" class="icon-btn sm fin-voltar" data-action="fin-assins" data-id="${volta}" aria-label="Voltar para as assinaturas" title="Voltar">${icon('left')}</button>`
+      : '';
+    openModal(`<form class="modal-body fin-form" data-form="fin-assin" data-id="${e.id || ''}" data-volta="${volta}">
+      ${modalHead(`${seta}${editing ? 'Editar assinatura' : 'Nova assinatura'}`)}
       <label class="field"><span>Nome</span><input name="motivo" required maxlength="80" autocomplete="off" value="${esc(e.motivo || '')}" placeholder="Ex.: Vivo, Google Drive" autofocus></label>
       <div class="row2">
         <label class="field"><span>Valor por mês</span><input name="valor" required inputmode="decimal" autocomplete="off" value="${valorInput(e.valor)}" placeholder="0,00"></label>
@@ -1442,6 +1503,8 @@ export function createFin(ctx) {
     if (e) limpaDepois(e, ops);
     if (ops.length) persist(db.batch(ops));
     if (geraAssinaturas() || ops.length) render();
+    const volta = form.dataset.volta && cartaoById(form.dataset.volta);
+    if (volta) openAssinCartao(volta);
   }
   // Assinaturas de um cartão (aberta pela fatura).
   function openAssinCartao(k) {
@@ -1452,7 +1515,8 @@ export function createFin(ctx) {
     const semCartao = F().estim.filter((e) => ehAssin(e) && !e.cartaoId);
     const lista = (arr) => `<ul class="fin-contas">${arr.map(linhaEstim).join('')}</ul>`;
     openModal(`<div class="modal-body fin-form">
-      ${modalHead(`Assinaturas · ${esc(k.nome)}`)}
+      ${modalHead(`<button type="button" class="icon-btn sm fin-voltar" data-action="fin-fat-volta" data-id="${k.id}" aria-label="Voltar para a fatura" title="Voltar para a fatura">${icon('left')}</button>Assinaturas · ${esc(k.nome)}`)}
+      <span hidden data-assin-k="${k.id}"></span>
       <div class="btn-row fin-fat-topo"><button type="button" class="btn primary sm" data-action="fin-new-assin" data-id="${k.id}">${icon('plus')}Nova assinatura</button></div>
       <p class="muted sm">Por mês: <strong>${brl(soma(ativas))}</strong>. Toque numa para mudar o valor ou marcar que acabou.</p>
       ${ativas.length ? lista(ativas) : '<p class="muted sm">Nenhuma assinatura ativa neste cartão.</p>'}
@@ -1770,9 +1834,13 @@ export function createFin(ctx) {
     'fin-new-estim': () => openEstim({}),
     'fin-edit-estim': ({ id }) => {
       const e = achar('estim', id) || {};
-      return ehAssin(e) ? openAssin(e) : openEstim(e);
+      return ehAssin(e) ? openAssin(e, deListaAssin()) : openEstim(e);
     },
-    'fin-new-assin': ({ id }) => openAssin({ onde: 'cartao', cartaoId: (id && cartaoById(id) ? id : F().cartoes[0]?.id) || '' }),
+    'fin-new-assin': ({ id }) => openAssin({ onde: 'cartao', cartaoId: (id && cartaoById(id) ? id : F().cartoes[0]?.id) || '' }, deListaAssin()),
+    'fin-fat-volta': ({ id }) => {
+      const k = cartaoById(id);
+      if (k) openFatura(k);
+    },
     'fin-assins': ({ id }) => {
       const k = cartaoById(id);
       if (k) openAssinCartao(k);
@@ -1885,6 +1953,8 @@ export function createFin(ctx) {
     'fin-export': () => openExport(),
     'fin-import-ok': () => aplicarImport(),
   };
+  // Cartão da lista de assinaturas aberta agora (vazio se não veio de lá).
+  const deListaAssin = () => document.querySelector('#modal [data-assin-k]')?.dataset.assinK || '';
   const openAgain = (k, doc) => (k === 'estim' && ehAssin(doc) ? openAssin(doc) : novoDoc[k]?.(doc));
 
   const FORMS = {
