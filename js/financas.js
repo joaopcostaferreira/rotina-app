@@ -357,7 +357,7 @@ export function createFin(ctx) {
 
   // ---------- Ganhos do mês: quanto veio de cada cliente ----------
   // Entrada com cliente vai para o cliente; sem cliente, para a descrição.
-  // A lista mostra todos os clientes. A pizza tem até 6 fatias: do 6º cliente em diante, eles dividem a última.
+  // Cada cliente tem a sua fatia e a sua cor (12 cores fixas; do 13º em diante, cores calculadas).
   function ganhosHTML(ent) {
     if (!ent.length) return '';
     const por = new Map();
@@ -370,10 +370,8 @@ export function createFin(ctx) {
       por.set(nome, g);
     }
     const todos = [...por.values()].sort((a, b) => b.valor - a.valor);
-    const juntos = todos.length > 6 ? todos.slice(5) : [];
-    const grupos = juntos.length
-      ? [...todos.slice(0, 5), { nome: juntos.map((g) => g.nome).join(', '), valor: soma(juntos), falta: 0 }]
-      : todos;
+    const grupos = todos;
+    const corG = (i) => (i < 12 ? `var(--g${i + 1})` : `hsl(${Math.round((i * 137.5) % 360)} 62% 52%)`);
     const total = soma(grupos);
     const falta = r2(todos.reduce((s, g) => s + g.falta, 0));
     const R = 48;
@@ -382,7 +380,7 @@ export function createFin(ctx) {
     let ini = 0;
     const fatias = grupos.map((g, i) => {
       const len = total ? (g.valor / total) * C : 0;
-      const cor = `var(--g${i + 1})`;
+      const cor = corG(i);
       const arco = `<circle class="fin-g-fatia" data-g="${i}" r="${R}" cx="60" cy="60" stroke="${cor}" stroke-dasharray="${Math.max(0, len - gap).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-ini).toFixed(2)}"><title>${esc(g.nome)}: ${brl(g.valor)} (${pctDe(g.valor, total)})</title></circle>`;
       ini += len;
       return { ...g, cor, arco };
@@ -397,8 +395,7 @@ export function createFin(ctx) {
         </svg>
         <ul class="fin-ganhos-lista">${todos
           .map((g, i) => {
-            const n = Math.min(i, 5);
-            return `<li data-g="${n}"><span class="fin-g-cor" style="background:var(--g${n + 1})"></span>
+            return `<li data-g="${i}"><span class="fin-g-cor" style="background:${corG(i)}"></span>
             <span class="fin-g-nome">${esc(g.nome)}${g.falta ? ` <small class="muted">${g.falta === g.valor ? 'a receber' : `${brl(g.falta)} a receber`}</small>` : ''}</span>
             <strong>${brl(g.valor)}</strong><small class="muted fin-g-pct">${pctDe(g.valor, total)}</small></li>`;
           })
