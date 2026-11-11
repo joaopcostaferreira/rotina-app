@@ -127,6 +127,8 @@ const listCats = () => S.categories.filter((c) => itensOf(c).length);
 const itemOf = (t) => (t?.itemId ? allItens(catById(t.categoriaId)).find((i) => i.id === t.itemId) : null);
 const subsOf = (cat) => (cat?.subtarefas || []).filter(Boolean);
 const visible = (tasks) => (tasks || []).filter((t) => !t.removido);
+// Tarefa resolvida: concluída ou marcada com X (não feita). Nenhuma das duas fica como pendente.
+const fechada = (t) => !!(t.concluido || t.naoFeito);
 const duracao = (t) => t.duracao || (t.fimAberto ? 90 : S.profile.duracaoPadrao || 30); // sem hora de fim: só para desenhar a agenda
 const firstName = () => S.profile.apelido || (S.user?.nome || '').split(' ')[0] || 'você';
 const sortCats = () =>
@@ -135,7 +137,8 @@ const sortCats = () =>
 function progress(tasks) {
   const v = visible(tasks);
   const done = v.filter((t) => t.concluido).length;
-  return { done, total: v.length, pct: v.length ? Math.round((done * 100) / v.length) : 0 };
+  const nao = v.filter((t) => t.naoFeito).length;
+  return { done, nao, total: v.length, pct: v.length ? Math.round((done * 100) / v.length) : 0 };
 }
 
 let toastTimer;
@@ -598,7 +601,7 @@ function dayNav(date) {
 
 // Passou do horário (ou o dia já passou) e ainda não foi concluída: continua pendente, marcada como atrasada.
 function isLate(t) {
-  if (t.concluido) return false;
+  if (fechada(t)) return false;
   const today = U.todayStr();
   if (t.data < today) return true;
   return t.data === today && !!t.horario && U.toMin(t.horario) + duracao(t) <= U.nowMin();
@@ -611,6 +614,10 @@ const avisoMin = (t) => (Number.isFinite(t.avisoAntes) ? t.avisoAntes : S.profil
 const isRunning = (t) => !!t.cronometroInicio;
 const elapsed = (t) => (t.tempoGasto || 0) + (isRunning(t) ? Math.max(0, (Date.now() - t.cronometroInicio) / 1000) : 0);
 const sumTime = (list) => list.reduce((a, t) => a + elapsed(t), 0);
+// Marcada com X: o tempo planejado que ficou sem fazer vira tempo desperdiçado (segundos).
+// Só conta tarefa com horário e fim; o que chegou a ser cronometrado sai da conta.
+const desperdicio = (t) => (t.naoFeito && t.horario && !t.fimAberto ? Math.max(0, duracao(t) * 60 - elapsed(t)) : 0);
+const sumDesperdicio = (list) => list.reduce((a, t) => a + desperdicio(t), 0);
 
 // Cada play → pausa vira uma sessão { i: início, f: fim, obs: o que fez } em t.sessoes (horários em ms).
 // Pausa: soma o tempo corrido ao acumulado e fecha a sessão aberta.
@@ -667,11 +674,19 @@ const liveAttrs = (t) => `data-live data-base="${t.tempoGasto || 0}" data-start=
 function timerHTML(t) {
   const run = isRunning(t);
   const sec = elapsed(t);
+  if (t.naoFeito) return '';
   if (t.concluido) return sec >= 60 ? `<span class="timer-chip" title="Tempo gasto">${icon('cronometro')}${U.fmtDur(sec)}</span>` : '';
   const label = run ? `<span ${liveAttrs(t)}>${U.fmtRelogio(sec)}</span>` : sec ? `<span>${U.fmtDur(sec)}</span>` : '';
   return `<button type="button" class="timer${run ? ' running' : ''}" data-action="timer" data-id="${t.id}" data-date="${t.data}"
     aria-label="${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'} cronômetro" title="${run ? 'Pausar' : 'Iniciar'} cronômetro">${icon(run ? 'pause' : 'play')}${label}</button>`;
 }
+
+// X ao lado do play e da nota: marca que não foi feita (tocar de novo desfaz).
+const xBtn = (t) =>
+  t.concluido
+    ? ''
+    : `<button type="button" class="icon-btn xs nf-btn${t.naoFeito ? ' on' : ''}" data-action="nao-feito" data-id="${t.id}" data-date="${t.data}"
+      aria-pressed="${!!t.naoFeito}" aria-label="${t.naoFeito ? 'Desfazer não feito' : 'Marcar como não feito'}: ${esc(t.titulo)}" title="${t.naoFeito ? 'Desfazer não feito' : 'Não fiz'}">${icon('x')}</button>`;
 
 const timeTotal = (list) => {
   const s = sumTime(list);
@@ -685,7 +700,7 @@ function taskRow(t, { showCat = false } = {}) {
   const meta = [
     late ? `<span class="chip late">Atrasada</span>` : '',
     t.horario ? `<span class="chip">${icon('horarios')}${t.horario}</span>` : '',
-    t.horario && avisoAtivo(t) && !t.concluido
+    t.horario && avisoAtivo(t) && !fechada(t)
       ? `<span class="chip muted" title="Aviso ${avisoMin(t) ? `${avisoMin(t)} min antes` : 'na hora'}">${icon('sino')}${avisoMin(t) ? `${avisoMin(t)} min` : 'na hora'}</span>`
       : '',
     showCat && cat ? `<span class="chip cat"><i class="dot"></i>${esc(cat.nome)}</span>` : '',
@@ -694,7 +709,7 @@ function taskRow(t, { showCat = false } = {}) {
     t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina">${icon('rotina')}Rotina</span>` : '',
     t.notas?.trim() ? `<span class="chip muted" title="Tem notas">${icon('nota')}Notas</span>` : '',
   ].join('');
-  return `<li class="task${t.concluido ? ' done' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}" style="--c:${colorOf(t)}">
+  return `<li class="task${t.concluido ? ' done' : ''}${t.naoFeito ? ' nf' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}" style="--c:${colorOf(t)}">
     <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
       data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
     <div class="task-main" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir notas e cronômetro">
@@ -703,6 +718,7 @@ function taskRow(t, { showCat = false } = {}) {
     </div>
     ${S.pedirConclusao === t.id && !t.concluido ? `<button type="button" class="b-done" data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}<span>Finalizou?</span></button>` : ''}
     ${timerHTML(t)}
+    ${xBtn(t)}
     <div class="task-actions">
       <button type="button" class="icon-btn sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Editar">${icon('edit')}</button>
       <button type="button" class="icon-btn sm" data-action="remove-daily" data-id="${t.id}" data-date="${t.data}" aria-label="Remover deste dia">${icon('trash')}</button>
@@ -742,7 +758,7 @@ function viewPainel() {
   const timed = v.filter((t) => t.horario).sort(U.byHorarioTitulo);
   const agora = timed.filter((t) => U.toMin(t.horario) <= now && now < U.toMin(t.horario) + duracao(t));
   const prox = timed.find((t) => U.toMin(t.horario) > now);
-  const pend = v.filter((t) => !t.concluido).sort(U.byHorarioTitulo);
+  const pend = v.filter((t) => !fechada(t)).sort(U.byHorarioTitulo);
   const h = new Date().getHours();
   const saud = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
 
@@ -887,6 +903,7 @@ function blockTools(t, { compact = false } = {}) {
     ${timerHTML(t)}
     <button type="button" class="icon-btn xs${t.notas?.trim() ? ' has-notes' : ''}" data-action="open-task" data-id="${t.id}" data-date="${t.data}"
       aria-label="Notas de ${esc(t.titulo)}" title="${t.notas?.trim() ? 'Ver notas' : 'Escrever uma nota'}">${icon('nota')}</button>
+    ${xBtn(t)}
   </div>`;
 }
 
@@ -958,8 +975,8 @@ function viewHoje() {
       const altura = y(e) - y(s);
       const short = altura < 60;
       const late = isLate(t);
-      const sub = [cli?.nome, itemOf(t)?.nome, late ? 'Atrasada' : ''].filter(Boolean).join(' · ');
-      return `<div class="block${t.concluido ? ' done' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
+      const sub = [cli?.nome, itemOf(t)?.nome, late ? 'Atrasada' : '', t.naoFeito ? 'Não feito' : ''].filter(Boolean).join(' · ');
+      return `<div class="block${t.concluido ? ' done' : ''}${t.naoFeito ? ' nf' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
         style="--c:${colorOf(t)};top:${y(s)}px;height:${altura}px;left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})">
         <button type="button" class="check b-check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
           data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
@@ -981,10 +998,12 @@ function viewHoje() {
       ? `<div class="now-line" style="top:${y(now)}px"><span>${U.fromMin(now)}</span></div>`
       : '';
   const tempo = sumTime(v);
+  const perdido = sumDesperdicio(v);
 
   return `${head}
   <div class="progress-line"><span class="bar"><i style="width:${p.pct}%"></i></span>
-    <span>${p.done} de ${p.total} concluídas${tempo >= 60 ? ` · ${icon('cronometro')}${U.fmtDur(tempo)}` : ''}</span></div>
+    <span>${p.done} de ${p.total} concluídas${p.nao ? ` · <span class="nf-txt">${p.nao} não feita${p.nao > 1 ? 's' : ''}</span>` : ''}${tempo >= 60 ? ` · ${icon('cronometro')}${U.fmtDur(tempo)}` : ''}</span></div>
+  ${perdido >= 60 ? `<p class="nf-aviso">${icon('x')}<span>Tempo desperdiçado ${isToday ? 'hoje' : 'neste dia'}: <strong>${U.fmtDur(perdido)}</strong> · ${p.nao} tarefa${p.nao > 1 ? 's' : ''} não feita${p.nao > 1 ? 's' : ''}. Entra nos <a href="#/relatorios">relatórios</a>.</span></p>` : ''}
   <div class="agenda-wrap">
     <div class="card timeline-card">
       ${
@@ -1141,7 +1160,7 @@ function viewClientes() {
     const sec = sumTime(tt);
     const servs = servicosOf(cli);
     const podeIniciar = isAtivo(cli) && !cli.soFinanceiro;
-    const status = !isAtivo(cli) ? 'Finalizado' : cli.soFinanceiro ? 'Só financeiro' : tt.length ? `${tt.filter((t) => !t.concluido).length} pendente(s) hoje` : 'Nada hoje';
+    const status = !isAtivo(cli) ? 'Finalizado' : cli.soFinanceiro ? 'Só financeiro' : tt.length ? `${tt.filter((t) => !fechada(t)).length} pendente(s) hoje` : 'Nada hoje';
     return `<article class="card client-card${isAtivo(cli) ? '' : ' off'}" style="--c:${workColor()}">
       <header>
         <div><h3>${esc(cli.nome)}</h3>
@@ -1325,8 +1344,8 @@ function openTaskDetail(t) {
         <strong class="detail-clock" ${run ? liveAttrs(t) : ''}>${U.fmtRelogio(sec)}</strong>
       </div>
       ${
-        t.concluido
-          ? '<span class="muted sm">Tarefa concluída</span>'
+        t.concluido || t.naoFeito
+          ? `<span class="muted sm">${t.concluido ? 'Tarefa concluída' : 'Marcada como não feita'}</span>`
           : `<button type="button" class="btn ${run ? 'primary' : 'soft'}" data-action="timer" data-id="${t.id}" data-date="${t.data}">
               ${icon(run ? 'pause' : 'play')}${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'}</button>`
       }
@@ -1342,6 +1361,7 @@ function openTaskDetail(t) {
     <footer class="modal-actions">
       <button type="button" class="btn ghost sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}">${icon('edit')}Editar</button>
       <span class="grow"></span>
+      ${t.concluido ? '' : `<button type="button" class="btn ghost${t.naoFeito ? ' nf-on' : ''}" data-action="nao-feito" data-id="${t.id}" data-date="${t.data}">${icon(t.naoFeito ? 'undo' : 'x')}${t.naoFeito ? 'Desfazer não feito' : 'Não fiz'}</button>`}
       <button type="button" class="btn ${t.concluido ? 'ghost' : 'primary'}" data-action="toggle" data-id="${t.id}" data-date="${t.data}">
         ${icon(t.concluido ? 'undo' : 'check')}${t.concluido ? 'Reabrir' : 'Concluir'}</button>
     </footer>
@@ -1369,31 +1389,58 @@ function sessionsHTML(t) {
 }
 
 // Ao pausar: pergunta o que foi feito naquele pedaço de tempo (opcional).
-function openObsPrompt(t) {
+// "Terminei:" em branco = a hora em que pausou; com hora (ex.: 17:00), a sessão termina ali (esqueceu de pausar).
+function openObsPrompt(t, { concluiu = false } = {}) {
   const s = t.sessoes?.[t.sessoes.length - 1];
   if (!s?.f) return;
   openModal(`<form class="modal-body obs-prompt" data-form="obs" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
-    ${modalHead(`Pausado · ${esc(t.titulo)}`)}
+    ${modalHead(`${concluiu ? 'Concluída' : 'Pausado'} · ${esc(t.titulo)}`)}
     <p class="muted sm">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}${hhmm(s.i)}–${hhmm(s.f)} · ${U.fmtDur((s.f - s.i) / 1000)}</p>
+    <label class="comecei-campo"><span>Terminei:</span><input type="time" name="fim" data-terminei aria-label="Horário em que terminou"></label>
+    <p class="muted sm terminei-dica">Em branco: ${hhmm(s.f)}, quando você ${concluiu ? 'concluiu' : 'pausou'}. Esqueceu de pausar? Coloque a hora em que parou.</p>
     <label class="field"><span>O que você fez? <em>opcional</em></span>
-      <textarea name="obs" rows="3" maxlength="300" placeholder="Ex.: 5 vídeos editados" autofocus>${esc(s.obs || '')}</textarea></label>
+      <textarea name="obs" rows="3" maxlength="300" placeholder="Ex.: 5 vídeos editados">${esc(s.obs || '')}</textarea></label>
     <footer class="modal-actions">
       <button type="button" class="btn ghost" data-action="close-modal">Pular</button>
       <span class="grow"></span>
-      <button type="button" class="btn soft" data-action="obs-concluir">${icon('check')}Salvar e concluir</button>
+      ${concluiu ? '' : `<button type="button" class="btn soft" data-action="obs-concluir">${icon('check')}Salvar e concluir</button>`}
       <button type="submit" class="btn primary">Salvar</button>
     </footer>
   </form>`);
 }
 
+// Devolve false quando a hora de "Terminei" não serve (a janela fica aberta).
 function saveObs(form) {
   const t = findTask(form.dataset.id, form.dataset.date);
   const s = t?.sessoes?.[t.sessoes.length - 1];
   if (!s) return null;
+  const data = {};
+  const v = form.elements.fim?.value;
+  if (v && s.f) {
+    let f = tsOf(t.data, U.toMin(v));
+    if (f <= s.i && f + 86_400_000 <= s.f) f += 86_400_000; // passou da meia-noite
+    if (f <= s.i) {
+      toast(`Essa hora é antes do começo (${hhmm(s.i)}).`);
+      return false;
+    }
+    if (f > s.f + 60_000) {
+      toast(`Essa hora é depois de ${hhmm(s.f)}. Para contar mais tempo, edite a tarefa.`);
+      return false;
+    }
+    if (f < s.f) {
+      t.tempoGasto = Math.max(0, Math.round((t.tempoGasto || 0) - (s.f - f) / 1000));
+      s.f = f;
+      data.tempoGasto = t.tempoGasto;
+    }
+  }
   const obs = form.elements.obs.value.trim();
   if (obs) s.obs = obs;
   else delete s.obs;
-  persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes }));
+  persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes, ...data }));
+  if (data.tempoGasto != null) {
+    render();
+    toast(`Terminou às ${hhmm(s.f)} · ${U.fmtDur(elapsed(t))} no total.`);
+  }
   return t;
 }
 
@@ -1421,6 +1468,7 @@ function openCheckTime(t) {
 function setDone(t, done, extra = {}) {
   const ops = [];
   if (done && isRunning(t)) stopTimer(t, ops);
+  if (done && t.naoFeito) extra = { ...extra, naoFeito: false };
   t.concluido = done;
   Object.assign(t, extra);
   if (S.pedirConclusao === t.id) S.pedirConclusao = null;
@@ -1532,7 +1580,7 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
   // Mesmo cliente/curso + mesmo serviço já aberto hoje: continua a mesma tarefa.
   let t = visible(list).find(
     (x) =>
-      !x.concluido &&
+      !fechada(x) &&
       x.categoriaId === categoriaId &&
       (x.clienteId || null) === (c?.id || null) &&
       (x.itemId || null) === (it?.id || null) &&
@@ -1738,12 +1786,19 @@ function viewRelatorios() {
   }
   const timed = tasks.filter((t) => elapsed(t) >= 1);
   const total = sumTime(timed);
+  const naoFeitas = tasks.filter((t) => t.naoFeito);
+  const perdido = sumDesperdicio(naoFeitas);
+  const nfCard = naoFeitoCard(naoFeitas, perdido);
 
   if (total < 60) {
-    return `${head}${emptyState(
-      'Ainda não há tempo registrado neste período',
-      'Aperte o play nas tarefas da tela Hoje para cronometrar. O tempo de cada tarefa entra aqui, separado por categoria e por cliente.',
-    )}`;
+    return `${head}${
+      naoFeitas.length
+        ? `<div class="rel-grid">${nfCard}</div>`
+        : emptyState(
+            'Ainda não há tempo registrado neste período',
+            'Aperte o play nas tarefas da tela Hoje para cronometrar. O tempo de cada tarefa entra aqui, separado por categoria e por cliente.',
+          )
+    }`;
   }
 
   // Por categoria
@@ -1790,6 +1845,7 @@ function viewRelatorios() {
     S.relPeriodo === 'hoje' ? null : [U.fmtDur(total / dias), `média por dia · ${comTempo} de ${dias} dia${dias === 1 ? '' : 's'} com tempo`],
     [`${feitas} de ${timed.length}`, `tarefa${timed.length === 1 ? '' : 's'} cronometrada${timed.length === 1 ? '' : 's'} concluída${feitas === 1 ? '' : 's'}`],
     wid ? [pctTxt((workTotal * 100) / total), `do tempo em ${wnome} · ${U.fmtDur(workTotal)}`] : null,
+    naoFeitas.length ? [perdido >= 60 ? U.fmtDur(perdido) : naoFeitas.length, perdido >= 60 ? `desperdiçado · ${naoFeitas.length} não feita${naoFeitas.length > 1 ? 's' : ''}` : `não feita${naoFeitas.length > 1 ? 's' : ''}`, 'nf'] : null,
   ].filter(Boolean);
 
   // Barras por dia (7 dias ou mês)
@@ -1849,7 +1905,7 @@ function viewRelatorios() {
     .join('');
 
   return `${head}
-  <div class="rel-tiles">${tiles.map(([v, l]) => `<div class="card rel-tile"><strong>${v}</strong><span>${l}</span></div>`).join('')}</div>
+  <div class="rel-tiles">${tiles.map(([v, l, c]) => `<div class="card rel-tile${c ? ` ${c}` : ''}"><strong>${v}</strong><span>${l}</span></div>`).join('')}</div>
   <div class="rel-grid">
     <section class="card rel-card">
       <h2 class="card-title">${icon('categorias')}Por categoria</h2>
@@ -1857,6 +1913,7 @@ function viewRelatorios() {
     </section>
     ${cliCard}
     ${listaCards}
+    ${nfCard}
     ${seuDiaCard(from, to)}
   </div>
   ${barras}
@@ -1874,11 +1931,46 @@ function viewRelatorios() {
   </section>`;
 }
 
+// Não feito (X): quanto tempo planejado ficou sem fazer, por categoria, e quais tarefas.
+function naoFeitoCard(lista, perdido) {
+  if (!lista.length) return '';
+  const m = new Map();
+  for (const t of lista) {
+    const c = catById(t.categoriaId);
+    const key = c ? c.id : '_sem';
+    const x = m.get(key) || { nome: c ? c.nome : 'Sem categoria', cor: c ? c.cor : SEM_COR, sec: 0, n: 0 };
+    x.sec += desperdicio(t);
+    x.n += 1;
+    m.set(key, x);
+  }
+  const cats = [...m.values()].sort((a, b) => b.sec - a.sec || b.n - a.n);
+  const max = cats[0]?.sec || 1;
+  const tarefas = [...lista].sort((a, b) => (b.data + (b.horario || '')).localeCompare(a.data + (a.horario || ''))).slice(0, 8);
+  return `<section class="card rel-card nf-card">
+    <h2 class="card-title">${icon('x')}Não feito <small class="muted">(tempo desperdiçado)</small></h2>
+    <p class="nf-total"><strong>${perdido >= 60 ? U.fmtDur(perdido) : '—'}</strong><span>${lista.length} tarefa${lista.length > 1 ? 's' : ''} marcada${lista.length > 1 ? 's' : ''} com X</span></p>
+    <ul class="task-bars">${cats
+      .map(
+        (x) => `<li>
+        <div class="tb-head"><span class="name"><i class="dot" style="--c:${x.cor}"></i>${esc(x.nome)} <small class="muted">· ${x.n}x</small></span>
+        <span class="val">${x.sec >= 60 ? U.fmtDur(x.sec) : '—'}</span></div>
+        <span class="tb-track"><i style="width:${x.sec >= 60 ? Math.max(1.5, (x.sec * 100) / max) : 0}%;background:var(--danger)"></i></span>
+      </li>`,
+      )
+      .join('')}</ul>
+    <ul class="nf-lista">${tarefas
+      .map((t) => `<li><span>${esc(t.titulo)}</span><small class="muted">${esc(U.fmtDiaCurto(t.data))}${t.horario ? ` · ${t.horario}` : ''}${desperdicio(t) >= 60 ? ` · ${U.fmtDur(desperdicio(t))}` : ''}</small></li>`)
+      .join('')}</ul>
+    <p class="muted sm">Conta o horário planejado de cada tarefa marcada com X (menos o que chegou a ser cronometrado).</p>
+  </section>`;
+}
+
 // "Seu dia": do acordar ao dormir (o sono não conta), quanto foi marcado e onde ficou sem marcação.
 // Antes da 1ª tarefa, até o "começo" (8h) é "acordando"; depois disso, sem marcação de manhã.
 // Depois da última tarefa: sem marcação, provavelmente lazer.
 const SEU_DIA = [
   ['marcado', 'Marcado (cronômetro)', '#22c55e'],
+  ['desperdicado', 'Tempo desperdiçado (marcado com X)', '#ef4444'],
   ['acordando', 'Acordando', '#a78bfa'],
   ['manha', 'Sem marcação de manhã', '#f59e0b'],
   ['entre', 'Sem marcação entre tarefas', '#94a3b8'],
@@ -1920,8 +2012,16 @@ function seuDiaCard(from, to) {
       if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]);
       else merged.push([...x]);
     }
+    // Blocos marcados com X: o horário planejado deles vira tempo desperdiçado.
+    const xs = [];
+    for (const t of visible(S.days[d] || [])) {
+      if (!t.naoFeito || !t.horario || t.fimAberto) continue;
+      const a = Math.max(W0, U.toMin(t.horario));
+      const b = Math.min(end, U.toMin(t.horario) + duracao(t));
+      if (b > a) xs.push([a, b]);
+    }
     // Dia sem nada marcado não entra (senão o dia inteiro vira "sem marcação").
-    if (!merged.length && solto < 1) {
+    if (!merged.length && solto < 1 && !xs.length) {
       vazios++;
       continue;
     }
@@ -1935,7 +2035,28 @@ function seuDiaCard(from, to) {
       manha: Math.max(0, first - c8),
       entre: merged.slice(1).reduce((a, x, k) => a + x[0] - merged[k][1], 0),
       lazer: Math.max(0, end - lastEnd),
+      desperdicado: 0,
     };
+    // O X tira tempo de onde ele caiu (manhã, entre tarefas, depois da última...), nunca do que foi cronometrado.
+    const sobrep = (a, b) => (b > a ? xs.reduce((s, [x, y]) => s + Math.max(0, Math.min(y, b) - Math.max(x, a)), 0) : 0);
+    const xu = [];
+    for (const x of xs.sort((p, q) => p[0] - q[0])) {
+      const l = xu[xu.length - 1];
+      if (l && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]);
+      else xu.push([...x]);
+    }
+    xs.splice(0, xs.length, ...xu);
+    const regioes = {
+      acordando: [[W0, Math.min(first, c8, end)]],
+      manha: [[c8, first]],
+      entre: merged.slice(1).map((x, k) => [merged[k][1], x[0]]),
+      lazer: [[lastEnd, end]],
+    };
+    for (const [k, lista] of Object.entries(regioes)) {
+      const tira = Math.min(g[k], lista.reduce((s, [a, b]) => s + sobrep(a, b), 0));
+      g[k] -= tira;
+      g.desperdicado += tira;
+    }
     // Tempo sem horário: entra como marcado e sai do que estava sem marcação.
     for (const k of ['lazer', 'entre', 'manha']) {
       const tira = Math.min(solto, g[k]);
@@ -2357,7 +2478,7 @@ async function applyImport(plan, substituir) {
   if (substituir) {
     // Mesma regra de excluir uma tarefa fixa: some dos próximos dias, o passado e o concluído ficam.
     const futuras = await db.range('dailyTasks', 'data', today, '9999-12-31');
-    futuras.filter((t) => t.origem === 'fixa' && !t.concluido).forEach((t) => ops.push({ type: 'delete', col: 'dailyTasks', id: t.id }));
+    futuras.filter((t) => t.origem === 'fixa' && !fechada(t)).forEach((t) => ops.push({ type: 'delete', col: 'dailyTasks', id: t.id }));
     S.recurring.forEach((r) => ops.push({ type: 'delete', col: 'recurringTasks', id: r.id }));
     S.recurring = [];
   }
@@ -2630,13 +2751,13 @@ async function notifTick() {
     const due = [];
     if (S.profile.notifTarefas) {
       for (const t of tasks) {
-        if (t.concluido || !avisoAtivo(t)) continue;
+        if (fechada(t) || !avisoAtivo(t)) continue;
         const antes = avisoMin(t);
         const fire = U.toMin(t.horario) - antes;
         if (now >= fire && now - fire <= 2) due.push({ key: `${today}_${t.id}_tarefa`, tipo: 'tarefa', ...textoTarefa(t, antes) });
       }
     }
-    const pend = tasks.filter((t) => !t.concluido);
+    const pend = tasks.filter((t) => !fechada(t));
     if (S.profile.notifPendentes && S.profile.notifPendentesHora && pend.length) {
       const fire = U.toMin(S.profile.notifPendentesHora);
       if (now >= fire && now - fire <= 2) due.push({ key: `${today}_pendentes`, tipo: 'pendentes', ...textoPendentes(pend) });
@@ -3052,7 +3173,7 @@ const avisoData = (f) => ({ aviso: f.aviso === 'on', avisoAntes: Number(f.avisoA
 
 const FORMS = {
   obs(form) {
-    saveObs(form);
+    if (saveObs(form) === false) return;
     closeModal();
   },
 
@@ -3207,7 +3328,7 @@ const FORMS = {
       const { diasDaSemana, ativo, repete, diaDoMes: _d, ...fields } = data;
       const ops = [{ type: 'update', col: 'recurringTasks', id, data }];
       for (const t of inst) {
-        if (t.data < today || t.concluido) continue;
+        if (t.data < today || fechada(t)) continue;
         if (!repeatsOn(data, t.data)) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
         else if (t.ajustado) {
           // Dia com horário ajustado à mão (encaixe): mantém o horário daquele dia.
@@ -3399,7 +3520,26 @@ const ACTIONS = {
     if (!t) return;
     // Concluir tarefa com horário sem ter usado o cronômetro: pergunta o tempo (já preenchido com o planejado).
     if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && t.horario) return openCheckTime(t);
+    // Concluiu com o cronômetro rodando: pergunta a hora em que terminou (em branco = agora).
+    const rodando = !t.concluido && isRunning(t) && !(modal.open && modal.dataset.detail === id);
     setDone(t, !t.concluido);
+    if (rodando) openObsPrompt(t, { concluiu: true });
+  },
+  'nao-feito': ({ id, date }) => {
+    const t = findTask(id, date);
+    if (!t) return;
+    const ops = [];
+    const marcar = !t.naoFeito;
+    if (marcar && isRunning(t)) stopTimer(t, ops);
+    t.naoFeito = marcar;
+    if (marcar) t.concluido = false;
+    if (S.pedirConclusao === t.id) S.pedirConclusao = null;
+    ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: marcar ? { naoFeito: true, concluido: false } : { naoFeito: false } });
+    render();
+    refreshDetail(id, date);
+    persist(db.batch(ops), () => (t.naoFeito = !marcar));
+    const w = desperdicio(t);
+    toast(marcar ? `Não feito${w >= 60 ? ` · ${U.fmtDur(w)} de tempo desperdiçado` : ''}.` : 'Voltou a ficar pendente.');
   },
   'check-semtempo': ({ id, date }) => {
     const t = findTask(id, date);
@@ -3408,6 +3548,7 @@ const ACTIONS = {
   },
   'obs-concluir': (_, el) => {
     const t = saveObs(el.closest('form'));
+    if (t === false) return;
     closeModal();
     if (t) setDone(t, true);
   },
@@ -3583,7 +3724,7 @@ const ACTIONS = {
     persist(
       db.batch([
         { type: 'delete', col: 'recurringTasks', id },
-        ...inst.filter((t) => t.data >= today && !t.concluido).map((t) => ({ type: 'delete', col: 'dailyTasks', id: t.id })),
+        ...inst.filter((t) => t.data >= today && !fechada(t)).map((t) => ({ type: 'delete', col: 'dailyTasks', id: t.id })),
       ]),
     );
     invalidateFrom(today);
