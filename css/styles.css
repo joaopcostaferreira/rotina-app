@@ -4601,3 +4601,41 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 @media (max-width: 520px) {
   .so-largo { display: none; }
 }
+
+/* Iniciar: "Comecei:" com a hora (em branco = agora) */
+.comecei-sub {
+  margin: -6px 0 4px;
+}
+.comecei-campo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 6px;
+}
+.comecei-campo span {
+  font-size: 18px;
+  font-weight: 600;
+}
+.comecei-campo input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 18px;
+}
+.comecei-campo input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.comecei .modal-actions {
+  justify-content: flex-end;
+}
+.comecei-btn {
+  min-width: 150px;
+  justify-content: center;
+}
