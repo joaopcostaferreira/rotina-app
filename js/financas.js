@@ -416,14 +416,24 @@ export function createFin(ctx) {
   function openEmps() {
     const ativos = F().emp.filter((e) => falta(e) > 0.004);
     const quitados = F().emp.filter((e) => falta(e) <= 0.004);
-    const linha = (e) => `<li class="fin-emp">
+    // Data com o ano quando não é deste ano; valores sem quebrar no meio ("R$" de um lado e o número do outro).
+    const quando = (d) => (d ? (d.slice(0, 4) === U.todayStr().slice(0, 4) ? diaMes(d) : `${diaMes(d)}/${d.slice(0, 4)}`) : '—');
+    const v = (x) => `<span class="nw">${brl(x)}</span>`;
+    const linha = (e) => {
+      const pago = falta(e) <= 0.004;
+      const ultimo = (e.abat || []).map((a) => a.data).filter(Boolean).sort().pop();
+      const det = pago
+        ? `emprestou ${v(e.valor)} em ${quando(e.data)}${ultimo ? ` · quitou em ${quando(ultimo)}` : ''}`
+        : `${quando(e.data)} · emprestou ${v(e.valor)}${recebido(e) ? ` · recebeu ${v(recebido(e))}` : ''}`;
+      return `<li class="fin-emp${pago ? ' pago' : ''}">
       <button type="button" class="grow" data-action="fin-emp-edit" data-id="${e.id}">
         <span class="fin-emp-nome">${esc(e.nome)}</span>
-        <small class="muted">${esc(contaById(e.contaId)?.nome || 'Sem conta')} · ${e.data ? diaMes(e.data) : '—'} · emprestou ${brl(e.valor)}${recebido(e) ? ` · recebeu ${brl(recebido(e))}` : ''}</small>
+        <small class="muted">${esc(contaById(e.contaId)?.nome || 'Sem conta')} · ${det}</small>
       </button>
-      <strong>${brl(falta(e))}</strong>
-      ${falta(e) > 0.004 ? `<button type="button" class="btn soft sm" data-action="fin-abater" data-id="${e.id}">Abater</button>` : ''}
+      ${pago ? `<span class="fin-emp-ok">${icon('check')}Quitado</span>` : `<strong>${brl(falta(e))}</strong>
+      <button type="button" class="btn soft sm" data-action="fin-abater" data-id="${e.id}">Abater</button>`}
     </li>`;
+    };
     openModal(`<div class="modal-body fin-form">
       ${modalHead('Dinheiro emprestado')}
       <p class="muted sm">A receber</p>
