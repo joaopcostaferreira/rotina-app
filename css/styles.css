@@ -4460,3 +4460,121 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-emp-nome { font-weight: 600; }
 .fin-emp strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fin-form .field span .i { width: 14px; height: 14px; vertical-align: -2px; opacity: 0.7; }
+
+/* Até que dia o custo variável já foi lançado (ex.: Uber) */
+.tx-ate { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: 500; opacity: 0.85; }
+
+/* Seta de voltar no título da janela */
+.modal-head h2 { display: flex; align-items: center; gap: 6px; }
+.fin-voltar { margin-left: -6px; }
+
+/* Ganhos do mês (pizza por cliente). Cores validadas para daltonismo, em anel. */
+:root {
+  --g1: #2a78d6; --g2: #eb6834; --g3: #1baf7a; --g4: #eda100; --g5: #e87ba4; --g6: #008300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --g1: #3987e5; --g2: #d95926; --g3: #199e70; --g4: #c98500; --g5: #d55181; --g6: #008300;
+  }
+}
+:root[data-theme='dark'] {
+  --g1: #3987e5; --g2: #d95926; --g3: #199e70; --g4: #c98500; --g5: #d55181; --g6: #008300;
+}
+.fin-ganhos { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); container-type: inline-size; }
+.fin-ganhos-tit { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+.fin-ganhos-corpo { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 16px; align-items: center; }
+.fin-pizza { width: 124px; height: 124px; display: block; }
+.fin-g-fatia { fill: none; stroke-width: 18; transition: opacity 0.15s; cursor: default; }
+.fin-pizza:hover .fin-g-fatia { opacity: 0.35; }
+.fin-pizza .fin-g-fatia:hover { opacity: 1; }
+.fin-pizza-v { fill: var(--text); font-size: 13px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+.fin-pizza-l { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+.fin-ganhos-lista { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.fin-ganhos-lista li { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.fin-ganhos-lista .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fin-ganhos-lista strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fin-g-cor { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.fin-g-pct { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.fin-ganhos-corpo:has(li[data-g="0"]:hover) .fin-g-fatia:not([data-g="0"]),
+.fin-ganhos-corpo:has(li[data-g="1"]:hover) .fin-g-fatia:not([data-g="1"]),
+.fin-ganhos-corpo:has(li[data-g="2"]:hover) .fin-g-fatia:not([data-g="2"]),
+.fin-ganhos-corpo:has(li[data-g="3"]:hover) .fin-g-fatia:not([data-g="3"]),
+.fin-ganhos-corpo:has(li[data-g="4"]:hover) .fin-g-fatia:not([data-g="4"]),
+.fin-ganhos-corpo:has(li[data-g="5"]:hover) .fin-g-fatia:not([data-g="5"]) { opacity: 0.35; }
+@media (max-width: 420px) {
+  .fin-ganhos-corpo { grid-template-columns: 1fr; justify-items: center; }
+  .fin-ganhos-lista { width: 100%; }
+}
+/* Cartão estreito: a lista vai para baixo da pizza, para os nomes caberem. */
+@container (max-width: 380px) {
+  .fin-ganhos-corpo { grid-template-columns: 1fr; justify-items: center; }
+  .fin-ganhos-lista { width: 100%; }
+}
+
+/* ---------- v19: diário em lista, aniversários, calculadora ---------- */
+
+/* Diário: lista de todas as anotações */
+.journal-index { padding: 14px; display: grid; gap: 10px; max-width: 860px; }
+.journal-index .journal-list { max-height: none; overflow: visible; gap: 4px; }
+.journal-index .journal-item { padding: 12px 14px; border: 1px solid var(--border); background: var(--surface); }
+.journal-index .journal-item:hover { background: var(--surface-2); }
+.journal-conta { margin: 0; }
+.journal-vazio { padding: 8px 2px; }
+.journal-tit { font-size: 15px; font-weight: 650; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journal-item .journal-date { color: var(--muted); font-weight: 500; }
+/* Na folha do dia, no celular, a lista lateral sai: a lista fica na tela "Anotações". */
+@media (max-width: 1080px) {
+  .journal-side { display: none; }
+}
+
+/* Cabeçalhos com dia e hora: podem quebrar linha no celular */
+.eyebrow [data-hoje] { white-space: nowrap; }
+
+/* Finanças: calculadora */
+.fin-saldo-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fin-saldo-top p { margin: 0; }
+.fin-saldo-top .btn .i { width: 16px; height: 16px; }
+.fin-calc-btn { margin-right: 4px; }
+
+.calc { width: min(340px, 100%); margin-inline: auto; }
+.calc-tela { background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; text-align: right; }
+.calc-expr { min-height: 20px; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.calc-res { font-size: 30px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; color: var(--muted); }
+.calc-res.final { color: var(--text); }
+.calc-teclas { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.calc-k { min-height: 54px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background 0.1s, transform 0.08s; }
+.calc-k:hover { background: var(--surface-2); }
+.calc-k:active, .calc-k.apertou { transform: scale(0.96); background: var(--surface-2); }
+.calc-k.fn { color: var(--muted); font-size: 17px; }
+.calc-k.op { color: var(--accent); font-size: 22px; }
+.calc-k.zero { grid-column: span 2; }
+.calc-k.igual { background: var(--accent); border-color: var(--accent); color: #fff; }
+.calc-k.igual:hover { filter: brightness(1.08); background: var(--accent); }
+.calc-copiar { width: 100%; margin-top: 10px; justify-content: center; }
+.modal-head h2 .i { width: 20px; height: 20px; }
+
+/* Aniversários */
+.aniv-destaque { display: flex; align-items: center; gap: 14px; padding: 16px 18px; margin-bottom: 16px; max-width: 860px; }
+.aniv-destaque p { margin: 0; }
+.aniv-bolo { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); flex: none; }
+.aniv-bolo .i { width: 24px; height: 24px; }
+.aniv-dest-nome { font-size: 20px; font-weight: 700; }
+.aniv-card { padding: 14px; display: grid; gap: 14px; max-width: 860px; }
+.aniv-grupo { display: grid; gap: 6px; }
+.aniv-tit { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.aniv-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.aniv-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
+.aniv-item:hover { background: var(--surface-2); }
+.aniv-data { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--surface-2); flex: none; line-height: 1.05; }
+.aniv-data strong { font-size: 17px; }
+.aniv-data small { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+.aniv-nome { flex: 1; min-width: 0; display: grid; }
+.aniv-nome strong, .aniv-nome small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aniv-falta { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.aniv-falta .i { width: 16px; height: 16px; }
+.aniv-item.perto .aniv-falta { color: var(--text); font-weight: 600; }
+.aniv-item.hoje { border-color: var(--accent); background: var(--accent-soft); }
+.aniv-item.hoje .aniv-falta { color: var(--accent); font-weight: 700; }
+.aniv-item.hoje .aniv-data { background: var(--accent); color: #fff; }
+.aniv-item.hoje .aniv-data small { color: #fff; }
+.aniv-vazio { margin: 0; }
