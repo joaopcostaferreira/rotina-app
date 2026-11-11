@@ -4471,14 +4471,17 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 /* Ganhos do mês (pizza por cliente). Cores validadas para daltonismo, em anel. */
 :root {
   --g1: #2a78d6; --g2: #eb6834; --g3: #1baf7a; --g4: #eda100; --g5: #e87ba4; --g6: #008300;
+  --g7: #8b5cf6; --g8: #b91c1c; --g9: #0891b2; --g10: #a16207; --g11: #c026d3; --g12: #0d9488;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --g1: #3987e5; --g2: #d95926; --g3: #199e70; --g4: #c98500; --g5: #d55181; --g6: #008300;
+    --g7: #8f6cf0; --g8: #e03c3c; --g9: #1aa3c0; --g10: #b07a22; --g11: #c94fd3; --g12: #14a394;
   }
 }
 :root[data-theme='dark'] {
   --g1: #3987e5; --g2: #d95926; --g3: #199e70; --g4: #c98500; --g5: #d55181; --g6: #008300;
+    --g7: #8f6cf0; --g8: #e03c3c; --g9: #1aa3c0; --g10: #b07a22; --g11: #c94fd3; --g12: #14a394;
 }
 .fin-ganhos { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); container-type: inline-size; }
 .fin-ganhos-tit { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
@@ -4502,7 +4505,21 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-ganhos-corpo:has(li[data-g="2"]:hover) .fin-g-fatia:not([data-g="2"]),
 .fin-ganhos-corpo:has(li[data-g="3"]:hover) .fin-g-fatia:not([data-g="3"]),
 .fin-ganhos-corpo:has(li[data-g="4"]:hover) .fin-g-fatia:not([data-g="4"]),
-.fin-ganhos-corpo:has(li[data-g="5"]:hover) .fin-g-fatia:not([data-g="5"]) { opacity: 0.35; }
+.fin-ganhos-corpo:has(li[data-g="5"]:hover) .fin-g-fatia:not([data-g="5"]),
+.fin-ganhos-corpo:has(li[data-g="6"]:hover) .fin-g-fatia:not([data-g="6"]),
+.fin-ganhos-corpo:has(li[data-g="7"]:hover) .fin-g-fatia:not([data-g="7"]),
+.fin-ganhos-corpo:has(li[data-g="8"]:hover) .fin-g-fatia:not([data-g="8"]),
+.fin-ganhos-corpo:has(li[data-g="9"]:hover) .fin-g-fatia:not([data-g="9"]),
+.fin-ganhos-corpo:has(li[data-g="10"]:hover) .fin-g-fatia:not([data-g="10"]),
+.fin-ganhos-corpo:has(li[data-g="11"]:hover) .fin-g-fatia:not([data-g="11"]),
+.fin-ganhos-corpo:has(li[data-g="12"]:hover) .fin-g-fatia:not([data-g="12"]),
+.fin-ganhos-corpo:has(li[data-g="13"]:hover) .fin-g-fatia:not([data-g="13"]),
+.fin-ganhos-corpo:has(li[data-g="14"]:hover) .fin-g-fatia:not([data-g="14"]),
+.fin-ganhos-corpo:has(li[data-g="15"]:hover) .fin-g-fatia:not([data-g="15"]),
+.fin-ganhos-corpo:has(li[data-g="16"]:hover) .fin-g-fatia:not([data-g="16"]),
+.fin-ganhos-corpo:has(li[data-g="17"]:hover) .fin-g-fatia:not([data-g="17"]),
+.fin-ganhos-corpo:has(li[data-g="18"]:hover) .fin-g-fatia:not([data-g="18"]),
+.fin-ganhos-corpo:has(li[data-g="19"]:hover) .fin-g-fatia:not([data-g="19"]) { opacity: 0.35; }
 @media (max-width: 420px) {
   .fin-ganhos-corpo { grid-template-columns: 1fr; justify-items: center; }
   .fin-ganhos-lista { width: 100%; }
