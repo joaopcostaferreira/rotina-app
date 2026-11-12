@@ -31,7 +31,7 @@ const DEFAULT_PROFILE = {
   avisoAntes: 10, // minutos (padrão para tarefas novas)
   notifPendentes: false, // lembrete de pendências no fim do dia
   notifPendentesHora: '21:00',
-  // Relatório "Seu dia": o sono não conta; antes da 1ª tarefa (até "comecoAte") é o tempo de acordar.
+  // Relatório "Seu dia": o sono não conta; do acordar até a 1ª tarefa é "Acordou → 1ª tarefa".
   acordar: '07:00',
   comecoAte: '08:00',
   dormir: '23:30',
@@ -1281,12 +1281,11 @@ function viewAjustes() {
 
     <section class="card">
       <h2 class="card-title">${icon('horarios')}Seu dia (Relatórios)</h2>
-      <div class="row3">
+      <div class="row2">
         <label class="field"><span>Acordo às</span><input type="time" name="acordar" value="${esc(p.acordar)}"></label>
-        <label class="field"><span>Começo até</span><input type="time" name="comecoAte" value="${esc(p.comecoAte)}"></label>
         <label class="field"><span>Durmo às</span><input type="time" name="dormir" value="${esc(p.dormir)}"></label>
       </div>
-      <p class="hint">O sono não entra na conta. Até a primeira tarefa (se ela começar antes do "começo até") conta como acordando; depois disso, o que não foi marcado aparece como "sem marcação".</p>
+      <p class="hint">O sono não entra na conta. Do horário de acordar até a primeira tarefa aparece como "Acordou → 1ª tarefa"; os buracos entre uma tarefa e outra, como "Pausa entre tarefas"; e da última tarefa até dormir, como lazer.</p>
     </section>
 
     ${notifCard()}
@@ -1390,9 +1389,10 @@ function sessionsHTML(t) {
 
 // Ao pausar: pergunta o que foi feito naquele pedaço de tempo (opcional).
 // "Terminei:" em branco = a hora em que pausou; com hora (ex.: 17:00), a sessão termina ali (esqueceu de pausar).
-function openObsPrompt(t, { concluiu = false } = {}) {
+function openObsPrompt(t, { concluiu = false, quem = null } = {}) {
   const s = t.sessoes?.[t.sessoes.length - 1];
   if (!s?.f) return;
+  S.quemObs = quem;
   openModal(`<form class="modal-body obs-prompt" data-form="obs" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
     ${modalHead(`${concluiu ? 'Concluída' : 'Pausado'} · ${esc(t.titulo)}`)}
     <p class="muted sm">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}${hhmm(s.i)}–${hhmm(s.f)} · ${U.fmtDur((s.f - s.i) / 1000)}</p>
@@ -1400,6 +1400,7 @@ function openObsPrompt(t, { concluiu = false } = {}) {
     <p class="muted sm terminei-dica">Em branco: ${hhmm(s.f)}, quando você ${concluiu ? 'concluiu' : 'pausou'}. Esqueceu de pausar? Coloque a hora em que parou.</p>
     <label class="field"><span>O que você fez? <em>opcional</em></span>
       <textarea name="obs" rows="3" maxlength="300" placeholder="Ex.: 5 vídeos editados">${esc(s.obs || '')}</textarea></label>
+    ${quemField(quem)}
     <footer class="modal-actions">
       <button type="button" class="btn ghost" data-action="close-modal">Pular</button>
       <span class="grow"></span>
@@ -1436,12 +1437,50 @@ function saveObs(form) {
   const obs = form.elements.obs.value.trim();
   if (obs) s.obs = obs;
   else delete s.obs;
+  Object.assign(data, quemDados(t, form, S.quemObs));
+  S.quemObs = null;
   persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes, ...data }));
-  if (data.tempoGasto != null) {
+  if (data.tempoGasto != null || data.clienteId || data.itemId) {
     render();
     toast(`Terminou às ${hhmm(s.f)} · ${U.fmtDur(elapsed(t))} no total.`);
   }
   return t;
+}
+
+// Ao concluir: Trabalho sem cliente pergunta qual cliente; categoria com lista (ex.: Cursos) sem item pergunta qual. Opcional.
+function quemFalta(t) {
+  if (!t || t.concluido) return null;
+  if (isWork(t.categoriaId)) {
+    const opts = t.clienteId ? [] : startClients();
+    return opts.length ? { campo: 'clienteId', titulo: 'Qual cliente foi?', opts } : null;
+  }
+  const k = catById(t.categoriaId);
+  const opts = t.itemId ? [] : itensOf(k);
+  if (!opts.length) return null;
+  return { campo: 'itemId', titulo: /curso/i.test(k.nome) ? 'Qual curso foi?' : `Qual de ${k.nome} foi?`, opts };
+}
+const quemField = (q) =>
+  q
+    ? `<label class="field"><span>${esc(q.titulo)} <em>opcional</em></span>
+      <select name="quem"><option value="">Pular</option>${q.opts.map((o) => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select></label>`
+    : '';
+// Lê a escolha do formulário (e já grava na tarefa); sem escolha, nada muda.
+function quemDados(t, form, q) {
+  const v = form?.elements?.quem?.value;
+  if (!t || !q || !v || !q.opts.some((o) => o.id === v)) return {};
+  t[q.campo] = v;
+  return { [q.campo]: v };
+}
+// Concluiu sem outra janela: pergunta numa janelinha só com os botões.
+function openQuem(t, q) {
+  openModal(`<div class="modal-body quem-pick" style="--c:${colorOf(t)}">
+    ${modalHead(`Concluída · ${esc(t.titulo)}`)}
+    <p class="muted sm">${esc(q.titulo)} <em>(opcional)</em></p>
+    <div class="pick-grid">${q.opts
+      .map((o) => `<button type="button" class="pick" data-action="quem-pick" data-id="${t.id}" data-date="${t.data}" data-campo="${q.campo}" data-val="${o.id}">${esc(o.nome)}</button>`)
+      .join('')}</div>
+    <footer class="modal-actions"><span class="grow"></span><button type="button" class="btn ghost" data-action="close-modal">Pular</button></footer>
+  </div>`);
 }
 
 // Concluir: tarefa com horário e sem tempo registrado pergunta quanto tempo foi (já preenchido com o planejado).
@@ -1456,6 +1495,7 @@ function openCheckTime(t) {
       <label class="field"><span>Começou</span><input type="time" name="ini" required value="${U.fromMin(ini)}"></label>
       <label class="field"><span>Terminou</span><input type="time" name="fim" required value="${fim == null ? '' : U.fromMin(fim % 1440)}" ${fim == null ? 'autofocus' : ''}></label>
     </div>
+    ${quemField(quemFalta(t))}
     <footer class="modal-actions">
       <button type="button" class="btn ghost" data-action="check-semtempo" data-id="${t.id}" data-date="${t.data}">Concluir sem tempo</button>
       <span class="grow"></span>
@@ -1966,21 +2006,19 @@ function naoFeitoCard(lista, perdido) {
 }
 
 // "Seu dia": do acordar ao dormir (o sono não conta), quanto foi marcado e onde ficou sem marcação.
-// Antes da 1ª tarefa, até o "começo" (8h) é "acordando"; depois disso, sem marcação de manhã.
+// Do acordar até a 1ª tarefa: "Acordou → 1ª tarefa". Buracos entre tarefas: pausa.
 // Depois da última tarefa: sem marcação, provavelmente lazer.
 const SEU_DIA = [
   ['marcado', 'Marcado (cronômetro)', '#22c55e'],
   ['desperdicado', 'Tempo desperdiçado (marcado com X)', '#ef4444'],
-  ['acordando', 'Acordando', '#a78bfa'],
-  ['manha', 'Sem marcação de manhã', '#f59e0b'],
-  ['entre', 'Sem marcação entre tarefas', '#94a3b8'],
+  ['acordou', 'Acordou → 1ª tarefa', '#a78bfa'],
+  ['entre', 'Pausa entre tarefas', '#94a3b8'],
   ['lazer', 'Depois da última tarefa (provavelmente lazer)', '#38bdf8'],
 ];
 
 function seuDiaCard(from, to) {
   const p = S.profile;
   const W0 = U.toMin(p.acordar || '07:00');
-  const c8 = Math.max(W0, U.toMin(p.comecoAte || '08:00'));
   let W1 = U.toMin(p.dormir || '23:30');
   if (W1 <= W0) W1 += 1440;
   const today = U.todayStr();
@@ -2031,8 +2069,7 @@ function seuDiaCard(from, to) {
     const lastEnd = merged.length ? merged[merged.length - 1][1] : end;
     const g = {
       marcado,
-      acordando: Math.max(0, Math.min(first, c8, end) - W0),
-      manha: Math.max(0, first - c8),
+      acordou: Math.max(0, Math.min(first, end) - W0),
       entre: merged.slice(1).reduce((a, x, k) => a + x[0] - merged[k][1], 0),
       lazer: Math.max(0, end - lastEnd),
       desperdicado: 0,
@@ -2047,8 +2084,7 @@ function seuDiaCard(from, to) {
     }
     xs.splice(0, xs.length, ...xu);
     const regioes = {
-      acordando: [[W0, Math.min(first, c8, end)]],
-      manha: [[c8, first]],
+      acordou: [[W0, Math.min(first, end)]],
       entre: merged.slice(1).map((x, k) => [merged[k][1], x[0]]),
       lazer: [[lastEnd, end]],
     };
@@ -2058,7 +2094,7 @@ function seuDiaCard(from, to) {
       g.desperdicado += tira;
     }
     // Tempo sem horário: entra como marcado e sai do que estava sem marcação.
-    for (const k of ['lazer', 'entre', 'manha']) {
+    for (const k of ['lazer', 'entre', 'acordou']) {
       const tira = Math.min(solto, g[k]);
       g[k] -= tira;
       g.marcado += tira;
@@ -3188,10 +3224,11 @@ const FORMS = {
     const f = tsOf(t.data, fim);
     const sessoes = [...(t.sessoes || []), { i, f, manual: true }];
     const tempoGasto = Math.round((t.tempoGasto || 0) + (f - i) / 1000);
+    const quem = quemDados(t, form, quemFalta(t));
     t.sessoes = sessoes;
     t.tempoGasto = tempoGasto;
     closeModal();
-    setDone(t, true, { sessoes, tempoGasto });
+    setDone(t, true, { sessoes, tempoGasto, ...quem });
   },
 
   'start-novo'(form) {
@@ -3522,8 +3559,19 @@ const ACTIONS = {
     if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && t.horario) return openCheckTime(t);
     // Concluiu com o cronômetro rodando: pergunta a hora em que terminou (em branco = agora).
     const rodando = !t.concluido && isRunning(t) && !(modal.open && modal.dataset.detail === id);
+    const quem = modal.open && modal.dataset.detail === id ? null : quemFalta(t);
     setDone(t, !t.concluido);
-    if (rodando) openObsPrompt(t, { concluiu: true });
+    if (rodando) openObsPrompt(t, { concluiu: true, quem });
+    else if (quem) openQuem(t, quem);
+  },
+  'quem-pick': ({ id, date, campo, val }) => {
+    const t = findTask(id, date);
+    closeModal();
+    if (!t || !['clienteId', 'itemId'].includes(campo)) return;
+    t[campo] = val;
+    render();
+    persist(db.update('dailyTasks', t.id, { [campo]: val }));
+    toast(`Anotado: ${(campo === 'clienteId' ? cliById(val) : itemOf(t))?.nome || ''}.`);
   },
   'nao-feito': ({ id, date }) => {
     const t = findTask(id, date);
@@ -3541,10 +3589,11 @@ const ACTIONS = {
     const w = desperdicio(t);
     toast(marcar ? `Não feito${w >= 60 ? ` · ${U.fmtDur(w)} de tempo desperdiçado` : ''}.` : 'Voltou a ficar pendente.');
   },
-  'check-semtempo': ({ id, date }) => {
+  'check-semtempo': ({ id, date }, el) => {
     const t = findTask(id, date);
+    const quem = quemDados(t, el.closest('form'), quemFalta(t));
     closeModal();
-    if (t) setDone(t, true);
+    if (t) setDone(t, true, quem);
   },
   'obs-concluir': (_, el) => {
     const t = saveObs(el.closest('form'));

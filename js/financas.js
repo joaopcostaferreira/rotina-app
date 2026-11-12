@@ -47,11 +47,9 @@ export function createFin(ctx) {
   S.finSemana = null; // segunda-feira da semana aberta no calendário de gastos
   S.finDia = null;
   S.finHoraPer = 'mes';
-  S.finExt = { tipo: '', onde: '', n: 60 }; // Extrato: filtros e quantos itens mostrar
-  S.finF = {
-    receitas: { per: 'mes', de: '', ate: '', cli: '', cat: '', q: '' },
-    despesas: { per: 'mes', de: '', ate: '', cat: '', onde: '', q: '' },
-  };
+  S.finExt = { tipo: '', fonte: 'c', onde: '', n: 60 }; // Extrato: filtros (contas ou cartões, qual) e quantos itens mostrar
+  const filtro0 = () => ({ per: 'mes', de: '', ate: '', cli: '', cat: '', onde: '', conta: '', q: '' });
+  S.finF = { receitas: filtro0(), despesas: filtro0(), transf: filtro0() };
   let carregando = null;
 
   function load(force = false) {
@@ -719,7 +717,11 @@ export function createFin(ctx) {
     const nivel = (t) => (!veioDoNotion(t) ? (t.parcela > 1 ? 2 : 0) : (t.data || '') <= limite ? 1 : 2);
     const futuras = f.tipo === 'futuras';
     // Assinatura de fatura futura não aparece aqui: fica só na fatura e em Assinaturas.
-    const daOnde = (t) => !(t.assinaturaId && (t.data || '') > limite) && (!f.onde || f.onde === (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`));
+    // Contas ou cartões (um de cada vez) e, se escolhido, qual.
+    const daOnde = (t) =>
+      !(t.assinaturaId && (t.data || '') > limite) &&
+      (t.cartaoId ? 'k' : 'c') === f.fonte &&
+      (!f.onde || f.onde === (t.cartaoId || t.contaId));
     const nFut = F().tx.filter((t) => nivel(t) === 2 && daOnde(t)).length;
     const ts = F()
       .tx.filter((t) => daOnde(t) && (futuras ? nivel(t) === 2 : nivel(t) !== 2 && (!f.tipo || t.tipo === f.tipo)))
@@ -754,11 +756,12 @@ export function createFin(ctx) {
     return `<section class="card fin-filtros">
       <div class="fin-f-row fin-ext-f">
         <div class="tab-chips">${chip('', 'Tudo')}${chip('saida', 'Saídas')}${chip('entrada', 'Entradas')}${chip('futuras', `Futuras${nFut ? ` (${nFut})` : ''}`, ' fut')}</div>
-        <label class="field"><span>Conta ou cartão</span><select data-fin-ext="onde">${opt('', 'Todos', f.onde)}${F()
-          .contas.map((c) => opt(`c:${c.id}`, c.nome, f.onde))
-          .join('')}${F()
-          .cartoes.map((k) => opt(`k:${k.id}`, k.nome, f.onde))
-          .join('')}</select></label>
+        <label class="field"><span>Ver</span><select data-fin-ext="fonte">${opt('c', 'Contas', f.fonte)}${opt('k', 'Cartões', f.fonte)}</select></label>
+        <label class="field"><span>${f.fonte === 'k' ? 'Cartão' : 'Conta'}</span><select data-fin-ext="onde">${
+          f.fonte === 'k'
+            ? opt('', 'Todos', f.onde) + F().cartoes.map((k) => opt(k.id, k.nome, f.onde)).join('')
+            : opt('', 'Todas', f.onde) + F().contas.map((c) => opt(c.id, c.nome, f.onde)).join('')
+        }</select></label>
       </div>
       <p class="muted sm">${
         futuras
@@ -774,13 +777,28 @@ export function createFin(ctx) {
 
   // ---------- Transferências do mês: de qual conta para qual, data e valor ----------
 
-  function transfHTML() {
-    const ts = F()
-      .transf.filter((t) => t.data?.startsWith(S.finMes))
+  function transfFiltradas() {
+    const f = S.finF.transf;
+    const q = norm(f.q || '');
+    return F()
+      .transf.filter((t) => {
+        if (!t.data) return false;
+        if (f.per === 'mes' && !t.data.startsWith(S.finMes)) return false;
+        if (f.per === 'intervalo' && ((f.de && t.data < f.de) || (f.ate && t.data > f.ate))) return false;
+        if (f.conta && t.deId !== f.conta && t.paraId !== f.conta) return false;
+        if (q && !norm(`${t.nome} ${t.obs || ''} ${contaById(t.deId)?.nome || ''} ${contaById(t.paraId)?.nome || ''}`).includes(q)) return false;
+        return true;
+      })
       .sort((a, b) => b.data.localeCompare(a.data) || (b.criadoEm || 0) - (a.criadoEm || 0));
+  }
+
+  function transfLista() {
+    const ts = transfFiltradas();
+    const f = S.finF.transf;
+    const limpo = !f.q && !f.conta && f.per === 'mes';
     const linhas = [];
     let dia = '';
-    for (const t of ts) {
+    for (const t of ts.slice(0, 300)) {
       if (t.data !== dia) {
         dia = t.data;
         linhas.push(`<li class="tx-dia"><span>${esc(U.fmtDiaCurto(t.data))}</span><span></span></li>`);
@@ -793,14 +811,36 @@ export function createFin(ctx) {
         </button>
         <span class="tx-val">${brl(t.valor)}</span></li>`);
     }
-    return `<section class="card fin-transf-topo">
-        <div class="grow">
-          <p class="muted sm">Transferido em ${esc(mesCurto(S.finMes))} · ${ts.length} transferência${ts.length === 1 ? '' : 's'}</p>
-          <p class="fin-big">${brl(soma(ts))}</p>
-        </div>
+    return `<div class="fin-total">
+        <div><span class="muted sm">${ts.length} transferência${ts.length === 1 ? '' : 's'}</span>
+        <strong>${brl(soma(ts))}</strong></div>
+        ${limpo ? '' : `<button type="button" class="btn ghost sm" data-action="fin-limpa" data-kind="transf">${icon('x')}Limpar filtros</button>`}
+      </div>
+      ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>${ts.length > 300 ? `<p class="muted sm">Mostrando 300 de ${ts.length}. Use os filtros para achar o resto.</p>` : ''}` : `<p class="muted fin-nada">${limpo ? 'Nenhuma transferência neste mês.' : 'Nada encontrado.'}</p>`}`;
+  }
+
+  // Mesmo filtro de Receitas e Despesas: busca, período e conta (de onde saiu ou para onde foi).
+  function transfHTML() {
+    const f = S.finF.transf;
+    const opt = (v, l, sel) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(l)}</option>`;
+    return `<section class="card fin-filtros" data-fin-kind="transf">
+      <div class="fin-f-row">
+        <label class="field fin-busca">${icon('busca')}<input type="search" placeholder="Buscar nome ou conta" value="${esc(f.q)}" data-fin-f="q" autocomplete="off"></label>
+      </div>
+      <div class="fin-f-row fin-transf-f">
+        <label class="field"><span>Período</span><select data-fin-f="per">
+          ${opt('mes', U.fmtMes(S.finMes), f.per)}${opt('tudo', 'Todo o período', f.per)}${opt('intervalo', 'Escolher datas', f.per)}</select></label>
+        ${
+          f.per === 'intervalo'
+            ? `<label class="field"><span>De</span><input type="date" value="${f.de}" data-fin-f="de"></label>
+               <label class="field"><span>Até</span><input type="date" value="${f.ate}" data-fin-f="ate"></label>`
+            : ''
+        }
+        <label class="field"><span>Conta</span><select data-fin-f="conta">${opt('', 'Todas', f.conta)}${F().contas.map((c) => opt(c.id, c.nome, f.conta)).join('')}</select></label>
         <button type="button" class="btn primary sm" data-action="fin-new-transf">${icon('plus')}Transferir</button>
-      </section>
-      ${ts.length ? `<ul class="tx-list card">${linhas.join('')}</ul>` : '<p class="muted fin-nada">Nenhuma transferência neste mês.</p>'}`;
+      </div>
+    </section>
+    <div data-fin-lista>${transfLista()}</div>`;
   }
 
   // ---------- Receitas e despesas ----------
@@ -884,13 +924,14 @@ export function createFin(ctx) {
       ${ts.length ? `<ul class="tx-list card">${blocos.join('')}</ul>${n < ts.length ? `<p class="muted sm">Mostrando ${n} de ${ts.length}. Use os filtros para achar o resto.</p>` : ''}` : `<p class="muted fin-nada">Nada encontrado.</p>`}`;
   }
 
-  // ---------- Contas, cartões, transferências e descrições ----------
+  // ---------- Contas, cartões, clientes e descrições ----------
 
   function contasHTML() {
     const sal = saldos();
-    const transf = F().transf.filter((t) => t.data.startsWith(S.finMes)).sort((a, b) => b.data.localeCompare(a.data));
     const grupoNome = (g) => GRUPOS.find((x) => x[0] === g)?.[1] || 'Outro';
+    // Esquerda: Contas, Clientes e Notion. Direita: Cartões e Descrições. No celular, um embaixo do outro.
     return `<div class="fin-grid">
+      <div class="fin-col">
       <section class="card">
         <header class="fin-sec-head"><h2 class="card-title">${icon('financas')}Contas</h2>
           <button type="button" class="btn ghost sm" data-action="fin-new-conta">${icon('plus')}Conta</button></header>
@@ -901,32 +942,6 @@ export function createFin(ctx) {
           )
           .join('')}</ul>
       </section>
-      <section class="card">
-        <header class="fin-sec-head"><h2 class="card-title">${icon('cartao')}Cartões</h2>
-          <button type="button" class="btn ghost sm" data-action="fin-new-cartao">${icon('plus')}Cartão</button></header>
-        ${F().cartoes.length ? F().cartoes.map(cartaoCard).join('') : '<p class="muted sm">Nenhum cartão.</p>'}
-      </section>
-      <section class="card">
-        <header class="fin-sec-head"><h2 class="card-title">${icon('transferir')}Transferências de ${esc(mesCurto(S.finMes))}</h2>
-          <button type="button" class="btn ghost sm" data-action="fin-new-transf">${icon('plus')}Transferir</button></header>
-        ${
-          transf.length
-            ? `<ul class="tx-list">${transf
-                .map(
-                  (t) => `<li class="tx${t.realizado ? '' : ' prev'}"><span class="tx-check on" aria-hidden="true">${icon('transferir')}</span>
-              <button type="button" class="tx-main" data-action="fin-edit-transf" data-id="${t.id}"><span class="tx-nome">${esc(t.nome)}</span>
-              <span class="tx-meta">${diaMes(t.data)} · ${esc(contaById(t.deId)?.nome || '?')} → ${esc(contaById(t.paraId)?.nome || '?')}</span></button>
-              <span class="tx-val">${brl(t.valor)}</span></li>`,
-                )
-                .join('')}</ul>`
-            : '<p class="muted sm">Nenhuma transferência neste mês.</p>'
-        }
-      </section>
-      <section class="card">
-        <header class="fin-sec-head"><h2 class="card-title">${icon('categorias')}Descrições</h2>
-          <button type="button" class="btn ghost sm" data-action="fin-new-cat">${icon('plus')}Descrição</button></header>
-        ${descricoesHTML(grupoNome)}
-      </section>
       ${clientesHTML()}
       <section class="card">
         <h2 class="card-title">${icon('download')}Notion</h2>
@@ -936,6 +951,19 @@ export function createFin(ctx) {
           <label class="btn ghost sm">${icon('plus')}Importar arquivo<input type="file" accept=".json,application/json" data-import-file hidden></label>
         </div>
       </section>
+      </div>
+      <div class="fin-col">
+      <section class="card">
+        <header class="fin-sec-head"><h2 class="card-title">${icon('cartao')}Cartões</h2>
+          <button type="button" class="btn ghost sm" data-action="fin-new-cartao">${icon('plus')}Cartão</button></header>
+        ${F().cartoes.length ? F().cartoes.map(cartaoCard).join('') : '<p class="muted sm">Nenhum cartão.</p>'}
+      </section>
+      <section class="card">
+        <header class="fin-sec-head"><h2 class="card-title">${icon('categorias')}Descrições</h2>
+          <button type="button" class="btn ghost sm" data-action="fin-new-cat">${icon('plus')}Descrição</button></header>
+        ${descricoesHTML(grupoNome)}
+      </section>
+      </div>
     </div>`;
   }
 
@@ -999,6 +1027,7 @@ export function createFin(ctx) {
     const real = soma(doMes(ym).filter((t) => t.tipo === 'saida' && (t.contaId || t.cartaoId)));
     const pct = total ? Math.round((real * 100) / total) : 0;
     return `<div class="fin-grid">
+      <div class="fin-col">
       <section class="card fin-saldo">
         <p class="muted sm">Gasto estimado por mês</p>
         <p class="fin-big">${brl(total)}</p>
@@ -1006,12 +1035,13 @@ export function createFin(ctx) {
         <div class="bar${pct > 100 ? ' over' : ''}"><span style="width:${Math.min(pct, 100)}%"></span></div>
         <div class="btn-row"><button type="button" class="btn primary sm" data-action="fin-new-estim">${icon('plus')}Gasto estimado</button></div>
       </section>
+      ${assinaturasCard()}
+      </div>
       <section class="card">
         <header class="fin-sec-head"><h2 class="card-title">Contas do mês</h2><strong>${brl(total)}</strong></header>
         <p class="muted sm">É o que soma na estimativa. O gasto do cartão entra aqui como uma linha só.</p>
         ${contas.length ? `<ul class="fin-contas">${contas.map(linhaEstim).join('')}</ul>` : '<p class="muted sm">Nada aqui.</p>'}
       </section>
-      ${assinaturasCard()}
     </div>`;
   }
 
@@ -1870,7 +1900,7 @@ export function createFin(ctx) {
       scrollTo(0, 0);
     },
     'fin-limpa': ({ kind }) => {
-      S.finF[kind] = { per: 'mes', de: '', ate: '', cli: '', cat: '', onde: '', q: '' };
+      S.finF[kind] = filtro0();
       render();
     },
     'fin-new-tx': ({ tipo }) => openTx({ tipo, data: S.finMes === U.todayStr().slice(0, 7) ? U.todayStr() : `${S.finMes}-01` }),
@@ -2058,7 +2088,7 @@ export function createFin(ctx) {
     clearTimeout(filtroTimer);
     filtroTimer = setTimeout(() => {
       const lista = document.querySelector('[data-fin-lista]');
-      if (lista) lista.innerHTML = listaHTML(kind);
+      if (lista) lista.innerHTML = kind === 'transf' ? transfLista() : listaHTML(kind);
     }, el.type === 'search' ? 200 : 0);
     return true;
   }
@@ -2085,6 +2115,7 @@ export function createFin(ctx) {
     }
     if (el.matches('[data-fin-ext]')) {
       S.finExt[el.dataset.finExt] = el.value;
+      if (el.dataset.finExt === 'fonte') S.finExt.onde = '';
       S.finExt.n = 60;
       render();
       return true;

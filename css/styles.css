@@ -4752,3 +4752,8 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 @media (max-width: 420px) {
   .fin-emps-mini { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* v27: botão Transferir na linha do filtro */
+.fin-transf-f { align-items: flex-end; }
+.fin-transf-f > .btn { flex: 0 0 auto; min-height: 42px; }
+@media (max-width: 420px) { .fin-transf-f > .btn { flex: 1 1 100%; justify-content: center; } }
