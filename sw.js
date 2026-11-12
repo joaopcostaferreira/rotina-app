@@ -1,7 +1,7 @@
 // Service worker: permite instalar o app e abrir sem internet.
 // Estratégia "rede primeiro": sempre busca a versão nova e usa o cache só se estiver offline.
 
-const CACHE = 'rotina-v29';
+const CACHE = 'rotina-v30';
 const SHELL = [
   './',
   './index.html',

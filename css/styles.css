@@ -4762,3 +4762,33 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .rel-datas { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; padding: 12px; margin: -6px 0 16px; }
 .rel-datas .field { flex: 1 1 150px; margin: 0; }
 .rel-datas p { flex-basis: 100%; margin: 0; }
+
+/* v30: tudo encaixando no celular */
+.modal-actions { flex-wrap: wrap; }
+@media (max-width: 899px) {
+  dialog:has(.detail), dialog:has(.history), dialog:has(.import-preview) { width: 100%; }
+}
+.nf-lista li { flex-wrap: wrap; }
+.nf-lista li span { flex: 1 1 140px; }
+.nf-lista li small { margin-left: auto; }
+.day-panel { grid-template-columns: minmax(0, 1fr); }
+.day-panel > * { min-width: 0; }
+.block.narrow:not(.short) .b-tools { margin-left: 0; flex-wrap: wrap; min-width: 0; }
+.fin-g-nome small { display: block; } /* o "a pagar" vai para a linha de baixo */
+.block.narrow:not(.short) .b-tools { flex: 0 1 auto; max-width: 100%; }
+.hero > div { min-width: 0; }
+.hero-time { display: block; }
+.hero-time .i { vertical-align: -2px; margin-right: 4px; }
+.fin-quick { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 360px) {
+  .fin-q { flex-direction: column; gap: 4px; padding: 8px 4px; font-size: 13px; }
+}
+.block.narrow.short .b-done { display: none; } /* o ✓ redondo do bloco já conclui */
+/* Celular: o dia fica na linha de cima, inteiro; os botões Tarefa e Iniciar descem */
+@media (max-width: 560px) {
+  .page-head:has(.daynav):has(.head-btns) { flex-wrap: wrap; row-gap: 12px; }
+  .page-head:has(.daynav):has(.head-btns) .daynav { flex: 1 1 100%; }
+  .page-head:has(.daynav) .head-btns { flex: 1 1 100%; }
+  .page-head:has(.daynav) .head-btns .btn { flex: 1; width: auto; padding: 0 14px; justify-content: center; }
+  .page-head:has(.daynav) .head-btns .btn.soft span { display: inline; }
+}
