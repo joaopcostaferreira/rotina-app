@@ -89,8 +89,8 @@ const NAV = [
   { id: 'ajustes', label: 'Ajustes' },
   { id: 'acessos', label: 'Acessos', admin: true },
 ];
-// Finanças: só para o dono do app (administrador) e no modo demonstração.
-const finOK = () => isDemo || S.isAdmin;
+// Finanças: para todo mundo que tem acesso (cada pessoa com as próprias contas, começando do zero).
+const finOK = () => true;
 const TABS_BASE = ['hoje', 'calendario', 'painel', 'diario'];
 let TABS = TABS_BASE;
 const navItems = () => NAV.filter((n) => (!n.admin || S.isAdmin) && (!n.fin || finOK()));
@@ -1389,10 +1389,9 @@ function sessionsHTML(t) {
 
 // Ao pausar: pergunta o que foi feito naquele pedaço de tempo (opcional).
 // "Terminei:" em branco = a hora em que pausou; com hora (ex.: 17:00), a sessão termina ali (esqueceu de pausar).
-function openObsPrompt(t, { concluiu = false, quem = null } = {}) {
+function openObsPrompt(t, { concluiu = false } = {}) {
   const s = t.sessoes?.[t.sessoes.length - 1];
   if (!s?.f) return;
-  S.quemObs = quem;
   openModal(`<form class="modal-body obs-prompt" data-form="obs" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
     ${modalHead(`${concluiu ? 'Concluída' : 'Pausado'} · ${esc(t.titulo)}`)}
     <p class="muted sm">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}${hhmm(s.i)}–${hhmm(s.f)} · ${U.fmtDur((s.f - s.i) / 1000)}</p>
@@ -1400,7 +1399,6 @@ function openObsPrompt(t, { concluiu = false, quem = null } = {}) {
     <p class="muted sm terminei-dica">Em branco: ${hhmm(s.f)}, quando você ${concluiu ? 'concluiu' : 'pausou'}. Esqueceu de pausar? Coloque a hora em que parou.</p>
     <label class="field"><span>O que você fez? <em>opcional</em></span>
       <textarea name="obs" rows="3" maxlength="300" placeholder="Ex.: 5 vídeos editados">${esc(s.obs || '')}</textarea></label>
-    ${quemField(quem)}
     <footer class="modal-actions">
       <button type="button" class="btn ghost" data-action="close-modal">Pular</button>
       <span class="grow"></span>
@@ -1437,65 +1435,105 @@ function saveObs(form) {
   const obs = form.elements.obs.value.trim();
   if (obs) s.obs = obs;
   else delete s.obs;
-  Object.assign(data, quemDados(t, form, S.quemObs));
-  S.quemObs = null;
   persist(db.update('dailyTasks', t.id, { sessoes: t.sessoes, ...data }));
-  if (data.tempoGasto != null || data.clienteId || data.itemId) {
+  if (data.tempoGasto != null) {
     render();
     toast(`Terminou às ${hhmm(s.f)} · ${U.fmtDur(elapsed(t))} no total.`);
   }
   return t;
 }
 
-// Ao concluir: Trabalho sem cliente pergunta qual cliente; categoria com lista (ex.: Cursos) sem item pergunta qual. Opcional.
-function quemFalta(t) {
-  if (!t || t.concluido) return null;
+// Ao concluir (✓): Trabalho pede o cliente e o serviço (e o nome da pessoa, se o cliente pede);
+// categoria com lista (ex.: Cursos) pede qual. Obrigatório: sem responder, a tarefa não é concluída.
+const nomeGenerico = (t, c) => {
+  const n = norm(t.titulo || '');
+  return !n || n === 'trabalho' || n === norm(catById(t.categoriaId)?.nome || '') || (!!c && n === norm(c.nome));
+};
+function identFalta(t) {
+  if (!t || t.concluido) return false;
   if (isWork(t.categoriaId)) {
-    const opts = t.clienteId ? [] : startClients();
-    return opts.length ? { campo: 'clienteId', titulo: 'Qual cliente foi?', opts } : null;
+    const c = cliById(t.clienteId);
+    if (!c) return startClients().length > 0;
+    return (!t.servico && nomeGenerico(t, c)) || (!!c.pedeNome && !t.pessoa);
   }
+  return !t.itemId && itensOf(catById(t.categoriaId)).length > 0;
+}
+const servOptions = (c, sel) =>
+  `<option value="">Escolha o serviço</option>${servicosOf(c)
+    .map((x) => `<option value="${esc(x)}" ${norm(x) === norm(sel) ? 'selected' : ''}>${esc(x)}</option>`)
+    .join('')}<option value="__outro" ${sel && !servicosOf(c).some((x) => norm(x) === norm(sel)) ? 'selected' : ''}>Outro serviço…</option>`;
+let identNext = null;
+function openIdent(t, next) {
+  identNext = next;
+  const work = isWork(t.categoriaId);
+  const c = cliById(t.clienteId);
   const k = catById(t.categoriaId);
-  const opts = t.itemId ? [] : itensOf(k);
-  if (!opts.length) return null;
-  return { campo: 'itemId', titulo: /curso/i.test(k.nome) ? 'Qual curso foi?' : `Qual de ${k.nome} foi?`, opts };
+  // Nome que já diz o serviço (ex.: "Edição") vem escolhido; nome genérico ("Trabalho") pede para escolher.
+  const servAtual = t.servico || (nomeGenerico(t, c) ? '' : t.titulo.trim());
+  const campos = work
+    ? `${
+        c
+          ? `<p class="muted sm">Cliente: <strong>${esc(c.nome)}</strong></p>`
+          : `<label class="field"><span>Qual cliente?</span><select name="cli" data-ident-cli>
+          <option value="">Escolha o cliente</option>${startClients().map((x) => `<option value="${x.id}">${esc(x.nome)}</option>`).join('')}</select></label>`
+      }
+      <label class="field" data-ident-serv-sel><span>O que você fez?</span><select name="servSel" data-ident-serv>${servOptions(c, servAtual)}</select></label>
+      <label class="field" data-ident-serv-novo><span>Qual serviço?</span><input name="servNovo" maxlength="60" autocomplete="off" placeholder="Ex.: Edição de vídeo" value="${esc(servicosOf(c).some((x) => norm(x) === norm(servAtual)) ? '' : servAtual)}"></label>
+      <label class="field" data-ident-pessoa hidden><span>Nome da pessoa</span>
+        <input name="pessoa" maxlength="80" autocomplete="off" list="dl-ident-pessoas" value="${esc(t.pessoa || '')}" placeholder="Ex.: Maria">
+        <datalist id="dl-ident-pessoas"></datalist></label>`
+    : `<label class="field"><span>${/curso/i.test(k?.nome || '') ? 'Qual curso?' : `Qual de ${esc(k?.nome || '')}?`}</span><select name="itemId">
+        <option value="">Escolha</option>${itensOf(k).map((i) => `<option value="${i.id}">${esc(i.nome)}</option>`).join('')}</select></label>`;
+  openModal(`<form class="modal-body" data-form="ident" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
+    ${modalHead(`Concluir · ${esc(t.titulo)}`)}
+    ${campos}
+    <footer class="modal-actions">
+      <button type="button" class="btn ghost" data-action="close-modal">Cancelar</button>
+      <span class="grow"></span>
+      <button type="submit" class="btn primary">Continuar</button>
+    </footer>
+  </form>`);
+  identSync(modal.querySelector('form'));
 }
-const quemField = (q) =>
-  q
-    ? `<label class="field"><span>${esc(q.titulo)} <em>opcional</em></span>
-      <select name="quem"><option value="">Pular</option>${q.opts.map((o) => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select></label>`
-    : '';
-// Lê a escolha do formulário (e já grava na tarefa); sem escolha, nada muda.
-function quemDados(t, form, q) {
-  const v = form?.elements?.quem?.value;
-  if (!t || !q || !v || !q.opts.some((o) => o.id === v)) return {};
-  t[q.campo] = v;
-  return { [q.campo]: v };
-}
-// Concluiu sem outra janela: pergunta numa janelinha só com os botões.
-function openQuem(t, q) {
-  openModal(`<div class="modal-body quem-pick" style="--c:${colorOf(t)}">
-    ${modalHead(`Concluída · ${esc(t.titulo)}`)}
-    <p class="muted sm">${esc(q.titulo)} <em>(opcional)</em></p>
-    <div class="pick-grid">${q.opts
-      .map((o) => `<button type="button" class="pick" data-action="quem-pick" data-id="${t.id}" data-date="${t.data}" data-campo="${q.campo}" data-val="${o.id}">${esc(o.nome)}</button>`)
-      .join('')}</div>
-    <footer class="modal-actions"><span class="grow"></span><button type="button" class="btn ghost" data-action="close-modal">Pular</button></footer>
-  </div>`);
+// Troca de cliente: atualiza a lista de serviços e mostra o nome da pessoa quando o cliente pede.
+function identSync(form) {
+  const t = findTask(form.dataset.id, form.dataset.date);
+  const c = cliById(form.elements.cli ? form.elements.cli.value : t?.clienteId);
+  const sel = form.elements.servSel;
+  if (!sel) return;
+  if (form.elements.cli && sel.dataset.para !== (c?.id || '')) {
+    const atual = sel.value === '__outro' ? form.elements.servNovo.value : sel.value;
+    sel.innerHTML = servOptions(c, atual);
+    sel.dataset.para = c?.id || '';
+  }
+  const temLista = servicosOf(c).length > 0;
+  form.querySelector('[data-ident-serv-sel]').hidden = !temLista;
+  form.querySelector('[data-ident-serv-novo]').hidden = temLista && sel.value !== '__outro';
+  const pf = form.querySelector('[data-ident-pessoa]');
+  pf.hidden = !c?.pedeNome;
+  form.querySelector('#dl-ident-pessoas').innerHTML = (c?.pessoas || []).map((x) => `<option value="${esc(x)}">`).join('');
 }
 
 // Concluir: tarefa com horário e sem tempo registrado pergunta quanto tempo foi (já preenchido com o planejado).
 function openCheckTime(t) {
-  const ini = U.toMin(t.horario);
   const isToday = t.data === U.todayStr();
-  const fim = t.fimAberto ? (isToday && U.nowMin() > ini ? U.nowMin() : null) : ini + duracao(t);
+  let ini;
+  let fim;
+  if (t.horario) {
+    ini = U.toMin(t.horario);
+    fim = t.fimAberto ? (isToday && U.nowMin() > ini ? U.nowMin() : null) : ini + duracao(t);
+  } else {
+    // Sem horário: hoje sugere "acabei agora"; em outro dia, os dois em branco.
+    fim = isToday ? U.nowMin() : null;
+    ini = fim == null ? null : Math.max(0, fim - duracao(t));
+  }
   openModal(`<form class="modal-body" data-form="checktime" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
     ${modalHead(`Concluir · ${esc(t.titulo)}`)}
-    <p class="muted sm">${t.fimAberto ? 'Que horas terminou?' : 'Foi esse o tempo? Se passou, mude o fim.'}</p>
+    <p class="muted sm">${!t.horario ? 'Que horas começou e terminou?' : t.fimAberto ? 'Que horas terminou?' : 'Foi esse o tempo? Se passou, mude o fim.'}</p>
     <div class="row2">
-      <label class="field"><span>Começou</span><input type="time" name="ini" required value="${U.fromMin(ini)}"></label>
+      <label class="field"><span>Começou</span><input type="time" name="ini" required value="${ini == null ? '' : U.fromMin(ini)}"></label>
       <label class="field"><span>Terminou</span><input type="time" name="fim" required value="${fim == null ? '' : U.fromMin(fim % 1440)}" ${fim == null ? 'autofocus' : ''}></label>
     </div>
-    ${quemField(quemFalta(t))}
     <footer class="modal-actions">
       <button type="button" class="btn ghost" data-action="check-semtempo" data-id="${t.id}" data-date="${t.data}">Concluir sem tempo</button>
       <span class="grow"></span>
@@ -1732,6 +1770,23 @@ const cliColor = (id) => {
   return i >= 0 && i < MAX_CORES_CLI ? `var(--serie-${i + 1})` : SEM_COR;
 };
 
+// Para contar nos relatórios: tarefa fora da lista que leva o nome de um item dela junto de "aula", "curso"
+// ou "estudo" (ex.: "Aula de inglês") conta como aquele item (Cursos → Inglês). Na lista do dia ela continua separada.
+function contaComo(t) {
+  const k = catById(t.categoriaId);
+  if (allItens(k).length || isWork(t.categoriaId) || t.clienteId) return { cat: k, item: itemOf(t) };
+  const txt = ` ${norm(`${t.titulo || ''} ${k?.nome || ''}`).replace(/[^a-z0-9]+/g, ' ')} `;
+  if (!/ (aula|aulas|curso|cursos|estudo|estudar|estudos|licao|licoes) /.test(txt)) return { cat: k, item: null };
+  for (const lk of S.categories) {
+    const it = allItens(lk).find((i) => {
+      const n = norm(i.nome).replace(/[^a-z0-9]+/g, ' ').trim();
+      return n.length >= 3 && txt.includes(` ${n} `);
+    });
+    if (it) return { cat: lk, item: it };
+  }
+  return { cat: k, item: null };
+}
+
 function relRange() {
   const today = U.todayStr();
   if (S.relPeriodo === 'hoje') return { from: today, to: today, label: 'Hoje' };
@@ -1844,7 +1899,7 @@ function viewRelatorios() {
   // Por categoria
   const cats = new Map();
   for (const t of timed) {
-    const c = catById(t.categoriaId);
+    const c = contaComo(t).cat;
     const key = c ? c.id : '_sem';
     const x = cats.get(key) || { key, label: c ? c.nome : 'Sem categoria', cor: c ? c.cor : SEM_COR, sec: 0 };
     x.sec += elapsed(t);
@@ -1864,18 +1919,6 @@ function viewRelatorios() {
     x.sec += elapsed(t);
     clis.set(key, x);
   }
-
-  // Por tarefa (mesmo título + mesmo cliente = mesma linha)
-  const byTask = new Map();
-  for (const t of timed) {
-    const key = `${t.titulo.trim().toLowerCase()}|${t.clienteId || ''}`;
-    const x = byTask.get(key) || { titulo: t.titulo.trim(), cli: cliById(t.clienteId)?.nome, cor: colorOf(t), sec: 0, n: 0 };
-    x.sec += elapsed(t);
-    x.n += 1;
-    byTask.set(key, x);
-  }
-  const topTasks = [...byTask.values()].sort((a, b) => b.sec - a.sec).slice(0, 10);
-  const maxTask = topTasks[0]?.sec || 1;
 
   const dias = porDia.filter((x) => x.d <= today).length || 1;
   const comTempo = porDia.filter((x) => x.sec >= 60).length;
@@ -1926,12 +1969,12 @@ function viewRelatorios() {
   const listaCards = S.categories
     .filter((k) => allItens(k).length)
     .map((k) => {
-      const its = timed.filter((t) => t.categoriaId === k.id);
+      const its = timed.filter((t) => contaComo(t).cat?.id === k.id);
       const tot = sumTime(its);
       if (tot < 60) return '';
       const m = new Map();
       its.forEach((t) => {
-        const it = itemOf(t);
+        const it = contaComo(t).item;
         const key = it ? it.id : '_sem';
         const x = m.get(key) || { key, label: it ? it.nome : 'Sem escolher', cor: it ? `var(--serie-${(allItens(k).indexOf(it) % MAX_CORES_CLI) + 1})` : SEM_COR, sec: 0 };
         x.sec += elapsed(t);
@@ -1956,19 +1999,7 @@ function viewRelatorios() {
     ${nfCard}
     ${seuDiaCard(from, to)}
   </div>
-  ${barras}
-  <section class="card rel-card">
-    <h2 class="card-title">${icon('cronometro')}Tarefas que mais tomaram tempo</h2>
-    <ul class="task-bars">${topTasks
-      .map(
-        (x) => `<li>
-        <div class="tb-head"><span class="name">${esc(x.titulo)}${x.cli ? ` <small class="muted">· ${esc(x.cli)}</small>` : ''}${x.n > 1 ? ` <small class="muted">· ${x.n}x</small>` : ''}</span>
-        <span class="val">${U.fmtDur(x.sec)} <small class="muted">${pctTxt((x.sec * 100) / total)}</small></span></div>
-        <span class="tb-track"><i style="width:${Math.max(1.5, (x.sec * 100) / maxTask)}%;background:${x.cor}"></i></span>
-      </li>`,
-      )
-      .join('')}</ul>
-  </section>`;
+  ${barras}`;
 }
 
 // Não feito (X): quanto tempo planejado ficou sem fazer, por categoria, e quais tarefas.
@@ -2008,12 +2039,13 @@ function naoFeitoCard(lista, perdido) {
 // "Seu dia": do acordar ao dormir (o sono não conta), quanto foi marcado e onde ficou sem marcação.
 // Do acordar até a 1ª tarefa: "Acordou → 1ª tarefa". Buracos entre tarefas: pausa.
 // Depois da última tarefa: sem marcação, provavelmente lazer.
+// O tempo com cronômetro aparece dividido por categoria (Trabalho, Cursos, Religião...), na cor de cada uma.
+// As faixas sem marcação ficam em tons de cinza, para não confundir com as categorias.
 const SEU_DIA = [
-  ['marcado', 'Marcado (cronômetro)', '#22c55e'],
   ['desperdicado', 'Tempo desperdiçado (marcado com X)', '#ef4444'],
-  ['acordou', 'Acordou → 1ª tarefa', '#a78bfa'],
+  ['acordou', 'Acordou → 1ª tarefa', '#64748b'],
   ['entre', 'Pausa entre tarefas', '#94a3b8'],
-  ['lazer', 'Depois da última tarefa (provavelmente lazer)', '#38bdf8'],
+  ['lazer', 'Depois da última tarefa (provavelmente lazer)', '#cbd5e1'],
 ];
 
 function seuDiaCard(from, to) {
@@ -2022,7 +2054,8 @@ function seuDiaCard(from, to) {
   let W1 = U.toMin(p.dormir || '23:30');
   if (W1 <= W0) W1 += 1440;
   const today = U.todayStr();
-  const tot = Object.fromEntries(SEU_DIA.map(([k]) => [k, 0]));
+  const tot = Object.fromEntries([['marcado'], ...SEU_DIA].map(([k]) => [k, 0]));
+  const porCat = new Map(); // id da categoria → segundos com cronômetro
   let dias = 0;
   let vazios = 0;
   for (let d = from; d <= to && d <= today; d = U.addDays(d, 1)) {
@@ -2031,16 +2064,25 @@ function seuDiaCard(from, to) {
     const base = U.parseYmd(d).getTime();
     const iv = [];
     let solto = 0; // tempo sem horário (cronômetro antigo, sem sessões)
+    const brutoCat = new Map(); // minutos de cada categoria no dia, para dividir o marcado
+    const somaCat = (t, m) => {
+      const k = contaComo(t).cat?.id || '_sem';
+      brutoCat.set(k, (brutoCat.get(k) || 0) + m);
+    };
     for (const t of visible(S.days[d] || [])) {
       const ss = (t.sessoes || []).filter((s) => s.i);
       if (!ss.length) {
         solto += elapsed(t) / 60;
+        somaCat(t, elapsed(t) / 60);
         continue;
       }
       for (const s of ss) {
         const a = Math.max(W0, (s.i - base) / 60_000);
         const b = Math.min(end, ((s.f || Date.now()) - base) / 60_000);
-        if (b > a) iv.push([a, b]);
+        if (b > a) {
+          iv.push([a, b]);
+          somaCat(t, b - a);
+        }
       }
     }
     iv.sort((x, y) => x[0] - y[0]);
@@ -2101,15 +2143,24 @@ function seuDiaCard(from, to) {
       solto -= tira;
     }
     for (const k in g) tot[k] += g[k] * 60;
+    // O marcado do dia, dividido entre as categorias na proporção do cronômetro de cada uma.
+    const bruto = [...brutoCat.values()].reduce((a, b) => a + b, 0);
+    if (bruto > 0) for (const [k, m] of brutoCat) porCat.set(k, (porCat.get(k) || 0) + (g.marcado * m * 60) / bruto);
   }
   const soma = Object.values(tot).reduce((a, b) => a + b, 0);
   if (!dias || soma < 60) return '';
-  const m = new Map(SEU_DIA.map(([key, label, cor]) => [key, { key, label, cor, sec: tot[key] }]));
-  const items = [...m.values()].filter((x) => x.sec >= 1).map((x) => ({ ...x, pct: (x.sec * 100) / soma }));
+  const cats = [...porCat.entries()]
+    .map(([id, sec]) => {
+      const c = catById(id);
+      return { key: `c${id}`, label: c ? c.nome : 'Sem categoria', cor: c ? c.cor : '#78716c', sec };
+    })
+    .sort((a, b) => b.sec - a.sec);
+  const resto = SEU_DIA.map(([key, label, cor]) => ({ key, label, cor, sec: tot[key] }));
+  const items = [...cats, ...resto].filter((x) => x.sec >= 1).map((x) => ({ ...x, pct: (x.sec * 100) / soma }));
   return `<section class="card rel-card">
     <h2 class="card-title">${icon('horarios')}Seu dia <small class="muted">(acordado${dias > 1 ? `, ${dias} dias` : ''})</small></h2>
     ${donutHTML('dia', items, soma)}
-    <p class="muted sm">Das ${esc(p.acordar || '07:00')} às ${esc(p.dormir || '23:30')}; o sono não entra.${dias > 1 ? ` Marcado por dia: <strong>${U.fmtDur(tot.marcado / dias)}</strong>.` : ''}${vazios ? ` ${vazios} dia${vazios > 1 ? 's' : ''} sem nada marcado ${vazios > 1 ? 'ficaram' : 'ficou'} de fora.` : ''} Mude os horários nos <a href="#/ajustes">Ajustes</a>.</p>
+    <p class="muted sm">Das ${esc(p.acordar || '07:00')} às ${esc(p.dormir || '23:30')}; o sono não entra.${dias > 1 ? ` Com cronômetro, por dia: <strong>${U.fmtDur(tot.marcado / dias)}</strong>.` : ''}${vazios ? ` ${vazios} dia${vazios > 1 ? 's' : ''} sem nada marcado ${vazios > 1 ? 'ficaram' : 'ficou'} de fora.` : ''} Mude os horários nos <a href="#/ajustes">Ajustes</a>.</p>
   </section>`;
 }
 
@@ -2676,7 +2727,7 @@ function viewAcessos() {
     .join('');
   return `
   <header class="page-head"><div><p class="eyebrow">Administração · ${agoraHTML()}</p><h1>Acessos</h1></div></header>
-  <p class="muted intro">Só os e-mails desta lista conseguem entrar no app. Cada pessoa continua vendo apenas os próprios dados. Esta lista fica guardada no Firebase e não aparece no GitHub.</p>
+  <p class="muted intro">Só os e-mails desta lista conseguem entrar no app. Cada pessoa usa o app inteiro (rotina, clientes, cursos, finanças, relatórios...), começando do zero e vendo apenas os próprios dados. Esta lista fica guardada no Firebase e não aparece no GitHub.</p>
   <form class="card acc-form" data-form="acesso">
     <label class="field"><span>Liberar novo e-mail (conta Google)</span>
       <input type="email" name="email" required placeholder="nome@gmail.com" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
@@ -2900,35 +2951,36 @@ const modalFoot = (deleteAction, id) => `<footer class="modal-actions">
   <button type="submit" class="btn primary">Salvar</button></footer>`;
 
 // Clientes finalizados e "só financeiro" ficam fora da lista (a não ser o que já está escolhido).
-const clientOptions = (catId, sel) =>
-  `<option value="">Nenhum</option>` +
+const clientOptions = (catId, sel, obrig = false) =>
+  `<option value="">${obrig ? 'Escolha o cliente' : 'Nenhum'}</option>` +
   clientsOf(catId)
     .filter((c) => c.id === sel || (isAtivo(c) && !c.soFinanceiro))
     .map((c) => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.nome)}${isAtivo(c) ? '' : ' (finalizado)'}</option>`)
     .join('');
 
-const itemOptions = (catId, sel) => {
+const itemOptions = (catId, sel, obrig = false) => {
   const k = catById(catId);
   const list = allItens(k).filter((i) => !i.oculto || i.id === sel);
-  return `<option value="">Escolher na hora</option>${list.map((i) => `<option value="${i.id}" ${i.id === sel ? 'selected' : ''}>${esc(i.nome)}</option>`).join('')}`;
+  return `<option value="">${obrig ? 'Escolha' : 'Escolher na hora'}</option>${list.map((i) => `<option value="${i.id}" ${i.id === sel ? 'selected' : ''}>${esc(i.nome)}</option>`).join('')}`;
 };
 
-function catClientFields(catId, cliId, itemId) {
+// obrig: tarefa do dia (cliente e "qual" obrigatórios). Na rotina fixa continuam opcionais (pergunta ao concluir).
+function catClientFields(catId, cliId, itemId, obrig = false) {
   const temLista = itensOf(catById(catId)).length > 0;
-  const itemField = `<label class="field" data-item-field ${temLista ? '' : 'hidden'}><span>Qual <em>opcional</em></span>
-      <select name="itemId">${itemOptions(catId, itemId)}</select></label>`;
-  return catClientFieldsBase(catId, cliId) + itemField;
+  const itemField = `<label class="field" data-item-field ${temLista ? '' : 'hidden'}><span>Qual${obrig ? '' : ' <em>opcional</em>'}</span>
+      <select name="itemId">${itemOptions(catId, itemId, obrig)}</select></label>`;
+  return catClientFieldsBase(catId, cliId, obrig) + itemField;
 }
 
-function catClientFieldsBase(catId, cliId) {
+function catClientFieldsBase(catId, cliId, obrig = false) {
   if (!S.categories.length) return `<p class="note">Crie uma <a href="#/categorias">categoria</a> primeiro.</p>`;
   return `<div class="row2">
     <label class="field"><span>Categoria</span>
       <select name="categoriaId" data-cat-select required>${S.categories
         .map((c) => `<option value="${c.id}" ${c.id === catId ? 'selected' : ''}>${esc(c.nome)}</option>`)
         .join('')}</select></label>
-    <label class="field" data-client-field ${isWork(catId) ? '' : 'hidden'}><span>Cliente <em>opcional</em></span>
-      <select name="clienteId">${clientOptions(catId, cliId)}</select>
+    <label class="field" data-client-field ${isWork(catId) ? '' : 'hidden'}><span>Cliente${obrig ? '' : ' <em>opcional</em>'}</span>
+      <select name="clienteId">${clientOptions(catId, cliId, obrig)}</select>
       ${S.clients.length ? '' : '<small class="hint">Nenhum cliente ainda. Cadastre em <a href="#/clientes">Clientes</a>.</small>'}</label>
   </div>`;
 }
@@ -2981,10 +3033,10 @@ function openDailyForm(t) {
   openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}" data-dur="${t.duracao || ''}">
     ${modalHead(editing ? 'Editar tarefa' : 'Nova tarefa')}
     ${fixa ? '<p class="note">Esta tarefa veio da rotina. Mudanças aqui valem só para este dia.</p>' : ''}
-    <label class="field"><span>Título</span>
+    <label class="field"><span data-titulo-lbl>${isWork(catId) ? 'Serviço' : 'Título'}</span>
       <input name="titulo" required maxlength="120" autocomplete="off" value="${esc(t.titulo || '')}" list="dl-serv" autofocus>
       <datalist id="dl-serv"></datalist></label>
-    ${catClientFields(catId, t.clienteId, t.itemId)}
+    ${catClientFields(catId, t.clienteId, t.itemId, true)}
     <label class="field" data-pessoa-field hidden><span>Nome da pessoa</span>
       <input name="pessoa" maxlength="80" autocomplete="off" value="${esc(t.pessoa || '')}" list="dl-pessoas2">
       <datalist id="dl-pessoas2"></datalist></label>
@@ -3213,6 +3265,44 @@ const FORMS = {
     closeModal();
   },
 
+  ident(form) {
+    const t = findTask(form.dataset.id, form.dataset.date);
+    if (!t) return closeModal();
+    const el = form.elements;
+    const data = {};
+    const ops = [];
+    if (el.itemId) {
+      if (!el.itemId.value) return toast('Escolha qual foi.'), el.itemId.focus();
+      data.itemId = el.itemId.value;
+    }
+    if (isWork(t.categoriaId)) {
+      const c = cliById(el.cli ? el.cli.value : t.clienteId);
+      if (el.cli && !c) return toast('Escolha o cliente.'), el.cli.focus();
+      const usaLista = !form.querySelector('[data-ident-serv-sel]').hidden && el.servSel.value !== '__outro';
+      const servico = (usaLista ? el.servSel.value : el.servNovo.value).trim();
+      if (!servico) return toast('Diga o que você fez.'), (usaLista ? el.servSel : el.servNovo).focus();
+      const pedePessoa = !form.querySelector('[data-ident-pessoa]').hidden;
+      const pessoa = pedePessoa ? el.pessoa.value.trim() : t.pessoa || '';
+      if (pedePessoa && !pessoa) return toast('Escreva o nome da pessoa.'), el.pessoa.focus();
+      Object.assign(data, { clienteId: c?.id || null, servico, pessoa: pessoa || null, titulo: [servico, pessoa].filter(Boolean).join(' · ') });
+      if (c) {
+        // Serviço novo e nome novo ficam guardados no cliente para a próxima vez.
+        const patch = {};
+        if (!servicosOf(c).some((x) => norm(x) === norm(servico))) patch.servicos = c.servicos = [...servicosOf(c), servico];
+        if (pessoa && !(c.pessoas || []).some((x) => norm(x) === norm(pessoa))) patch.pessoas = c.pessoas = [pessoa, ...(c.pessoas || [])].slice(0, 60);
+        if (Object.keys(patch).length) ops.push({ type: 'update', col: 'clients', id: c.id, data: patch });
+      }
+    }
+    Object.assign(t, data);
+    ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data });
+    persist(db.batch(ops));
+    const next = identNext;
+    identNext = null;
+    closeModal();
+    render();
+    next?.(t);
+  },
+
   checktime(form) {
     const t = findTask(form.dataset.id, form.dataset.date);
     if (!t) return closeModal();
@@ -3224,11 +3314,10 @@ const FORMS = {
     const f = tsOf(t.data, fim);
     const sessoes = [...(t.sessoes || []), { i, f, manual: true }];
     const tempoGasto = Math.round((t.tempoGasto || 0) + (f - i) / 1000);
-    const quem = quemDados(t, form, quemFalta(t));
     t.sessoes = sessoes;
     t.tempoGasto = tempoGasto;
     closeModal();
-    setDone(t, true, { sessoes, tempoGasto, ...quem });
+    setDone(t, true, { sessoes, tempoGasto });
   },
 
   'start-novo'(form) {
@@ -3266,8 +3355,11 @@ const FORMS = {
     let salva = null; // a tarefa como ficou, para conferir o encaixe
     let mudouHora = !id;
     if (form.dataset.salvando) return; // evita salvar duas vezes enquanto confere o dia
-    form.dataset.salvando = '1';
     const cli = isWork(f.categoriaId) ? cliById(f.clienteId) : null;
+    // Trabalho sempre com cliente; categoria com lista (ex.: Cursos) sempre com qual.
+    if (isWork(f.categoriaId) && !cli && startClients().length) return toast('Escolha o cliente.'), form.elements.clienteId.focus();
+    if (itensOf(catById(f.categoriaId)).length && !f.itemId) return toast('Escolha qual (ex.: o curso).'), form.elements.itemId.focus();
+    form.dataset.salvando = '1';
     const patch = {
       titulo: f.titulo.trim(),
       categoriaId: f.categoriaId || null,
@@ -3280,6 +3372,11 @@ const FORMS = {
       ...avisoData(f),
     };
     if (!patch.titulo) return;
+    // Serviço novo fica guardado no cliente para a próxima vez.
+    if (cli && !servicosOf(cli).some((x) => norm(x) === norm(patch.titulo))) {
+      cli.servicos = [...servicosOf(cli), patch.titulo];
+      persist(db.update('clients', cli.id, { servicos: cli.servicos }));
+    }
     // Nome novo (ex.: Fotografia) fica guardado no cliente para a próxima vez.
     if (patch.pessoa && !(cli.pessoas || []).some((x) => norm(x) === norm(patch.pessoa))) {
       cli.pessoas = [patch.pessoa, ...(cli.pessoas || [])].slice(0, 60);
@@ -3555,23 +3652,15 @@ const ACTIONS = {
   toggle: ({ id, date }) => {
     const t = findTask(id, date);
     if (!t) return;
-    // Concluir tarefa com horário sem ter usado o cronômetro: pergunta o tempo (já preenchido com o planejado).
-    if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && t.horario) return openCheckTime(t);
+    // 1º: Trabalho sem cliente/serviço ou curso sem qual → pergunta (obrigatório) e depois segue daqui.
+    if (!t.concluido && identFalta(t)) return openIdent(t, () => ACTIONS.toggle({ id, date }));
+    // 2º: sem tempo registrado, pergunta começou/terminou (com horário: o planejado; Trabalho e cursos sem horário também).
+    const pedeTempo = !!t.horario || isWork(t.categoriaId) || itensOf(catById(t.categoriaId)).length > 0;
+    if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && pedeTempo) return openCheckTime(t);
     // Concluiu com o cronômetro rodando: pergunta a hora em que terminou (em branco = agora).
     const rodando = !t.concluido && isRunning(t) && !(modal.open && modal.dataset.detail === id);
-    const quem = modal.open && modal.dataset.detail === id ? null : quemFalta(t);
     setDone(t, !t.concluido);
-    if (rodando) openObsPrompt(t, { concluiu: true, quem });
-    else if (quem) openQuem(t, quem);
-  },
-  'quem-pick': ({ id, date, campo, val }) => {
-    const t = findTask(id, date);
-    closeModal();
-    if (!t || !['clienteId', 'itemId'].includes(campo)) return;
-    t[campo] = val;
-    render();
-    persist(db.update('dailyTasks', t.id, { [campo]: val }));
-    toast(`Anotado: ${(campo === 'clienteId' ? cliById(val) : itemOf(t))?.nome || ''}.`);
+    if (rodando) openObsPrompt(t, { concluiu: true });
   },
   'nao-feito': ({ id, date }) => {
     const t = findTask(id, date);
@@ -3589,16 +3678,16 @@ const ACTIONS = {
     const w = desperdicio(t);
     toast(marcar ? `Não feito${w >= 60 ? ` · ${U.fmtDur(w)} de tempo desperdiçado` : ''}.` : 'Voltou a ficar pendente.');
   },
-  'check-semtempo': ({ id, date }, el) => {
+  'check-semtempo': ({ id, date }) => {
     const t = findTask(id, date);
-    const quem = quemDados(t, el.closest('form'), quemFalta(t));
     closeModal();
-    if (t) setDone(t, true, quem);
+    if (t) setDone(t, true);
   },
   'obs-concluir': (_, el) => {
     const t = saveObs(el.closest('form'));
     if (t === false) return;
     closeModal();
+    if (t && identFalta(t)) return openIdent(t, (x) => setDone(x, true));
     if (t) setDone(t, true);
   },
   'start-pick': ({ cli, cat, item, bloco }) => openStart({ cli, cat, item, bloco }),
@@ -3911,15 +4000,20 @@ document.addEventListener('change', (e) => {
     if (!file) return;
     if (file.size > 5_000_000) return toast('Arquivo grande demais para importar.');
     file.text().then(startImport, (err) => toast(errMsg(err)));
+  } else if (t.matches('[data-ident-cli], [data-ident-serv]')) {
+    identSync(t.form);
   } else if (t.matches('[data-cat-select]')) {
+    const obrig = t.form.dataset.form === 'daily';
     const field = t.form.querySelector('[data-client-field]');
     field.hidden = !isWork(t.value);
-    field.querySelector('select').innerHTML = clientOptions(t.value, '');
+    field.querySelector('select').innerHTML = clientOptions(t.value, '', obrig);
     const item = t.form.querySelector('[data-item-field]');
     if (item) {
       item.hidden = !itensOf(catById(t.value)).length;
-      item.querySelector('select').innerHTML = itemOptions(t.value, '');
+      item.querySelector('select').innerHTML = itemOptions(t.value, '', obrig);
     }
+    const lbl = t.form.querySelector('[data-titulo-lbl]');
+    if (lbl) lbl.textContent = isWork(t.value) ? 'Serviço' : 'Título';
     servicosList(t.form);
   } else if (t.matches('select[name="clienteId"]')) {
     servicosList(t.form);
