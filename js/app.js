@@ -60,8 +60,10 @@ const S = {
   calMonth: U.todayStr().slice(0, 7),
   calSel: U.todayStr(),
   rotinaDia: 'all',
-  relPeriodo: 'semana', // Relatórios: 'hoje' | 'semana' | 'mes'
+  relPeriodo: 'semana', // Relatórios: 'ontem' | 'hoje' | 'semana' | 'mes' | 'custom'
   relMes: U.todayStr().slice(0, 7),
+  relDe: U.addDays(U.todayStr(), -6), // Personalizado: de… até… (a mesma data nos dois = um dia só)
+  relAte: U.todayStr(),
   pedirConclusao: null, // tarefa pausada em Hoje: mostra o ✓ "Finalizou?" ao lado do cronômetro
   diarioDate: null, // dia aberto no Diário (null = lista de anotações)
   journal: null, // entradas do Diário (data -> { texto })
@@ -1790,6 +1792,17 @@ function contaComo(t) {
 function relRange() {
   const today = U.todayStr();
   if (S.relPeriodo === 'hoje') return { from: today, to: today, label: 'Hoje' };
+  if (S.relPeriodo === 'ontem') {
+    const d = U.addDays(today, -1);
+    return { from: d, to: d, label: 'Ontem' };
+  }
+  if (S.relPeriodo === 'custom') {
+    let [from, to] = [S.relDe || today, S.relAte || S.relDe || today];
+    if (to < from) [from, to] = [to, from];
+    if (U.addDays(from, 366) < to) to = U.addDays(from, 366); // até 1 ano por vez
+    const dm = (d) => `${d.slice(8)}/${d.slice(5, 7)}${d.slice(0, 4) === today.slice(0, 4) ? '' : `/${d.slice(0, 4)}`}`;
+    return { from, to, label: from === to ? U.fmtDiaCurto(from) : `${dm(from)} a ${dm(to)}` };
+  }
   if (S.relPeriodo === 'mes') {
     const from = `${S.relMes}-01`;
     const to = U.addDays(`${U.addMonths(S.relMes, 1)}-01`, -1);
@@ -1868,7 +1881,16 @@ function viewRelatorios() {
       ${mes && S.relMes < today.slice(0, 7) ? `<button type="button" class="icon-btn" data-action="rel-mes" data-n="1" aria-label="Próximo mês">${icon('right')}</button>` : ''}
     </div>
   </header>
-  <div class="tab-chips" role="tablist">${chip('hoje', 'Hoje')}${chip('semana', '7 dias')}${chip('mes', 'Mês')}</div>`;
+  <div class="tab-chips" role="tablist">${chip('ontem', 'Ontem')}${chip('hoje', 'Hoje')}${chip('semana', '7 dias')}${chip('mes', 'Mês')}${chip('custom', 'Personalizado')}</div>
+  ${
+    S.relPeriodo === 'custom'
+      ? `<div class="card rel-datas">
+      <label class="field"><span>De</span><input type="date" value="${from}" data-rel-data="relDe"></label>
+      <label class="field"><span>Até</span><input type="date" value="${to}" data-rel-data="relAte"></label>
+      <p class="muted sm">Para ver um dia só, coloque a mesma data nos dois.</p>
+    </div>`
+      : ''
+  }`;
 
   if (!ensureRange(from, to)) return head + loading();
 
@@ -1925,7 +1947,7 @@ function viewRelatorios() {
   const feitas = timed.filter((t) => t.concluido).length;
   const tiles = [
     [U.fmtDur(total), 'tempo registrado'],
-    S.relPeriodo === 'hoje' ? null : [U.fmtDur(total / dias), `média por dia · ${comTempo} de ${dias} dia${dias === 1 ? '' : 's'} com tempo`],
+    from === to ? null : [U.fmtDur(total / dias), `média por dia · ${comTempo} de ${dias} dia${dias === 1 ? '' : 's'} com tempo`],
     [`${feitas} de ${timed.length}`, `tarefa${timed.length === 1 ? '' : 's'} cronometrada${timed.length === 1 ? '' : 's'} concluída${feitas === 1 ? '' : 's'}`],
     wid ? [pctTxt((workTotal * 100) / total), `do tempo em ${wnome} · ${U.fmtDur(workTotal)}`] : null,
     naoFeitas.length ? [perdido >= 60 ? U.fmtDur(perdido) : naoFeitas.length, perdido >= 60 ? `desperdiçado · ${naoFeitas.length} não feita${naoFeitas.length > 1 ? 's' : ''}` : `não feita${naoFeitas.length > 1 ? 's' : ''}`, 'nf'] : null,
@@ -1933,15 +1955,16 @@ function viewRelatorios() {
 
   // Barras por dia (7 dias ou mês)
   let barras = '';
-  if (S.relPeriodo !== 'hoje') {
+  if (from !== to) {
+    const longo = porDia.length > 7;
     const max = Math.max(...porDia.map((x) => x.sec), 1);
     barras = `<section class="card rel-card">
       <h2 class="card-title">${icon('calendario')}Tempo por dia</h2>
-      <div class="day-bars${mes ? ' mes' : ''}">
+      <div class="day-bars${longo ? ' mes' : ''}">
         ${porDia
           .map((x) => {
             const dnum = Number(x.d.slice(8));
-            const lbl = mes ? (dnum === 1 || dnum % 5 === 0 ? dnum : '') : U.DIAS_CURTO[U.weekdayOf(x.d)];
+            const lbl = longo ? (dnum === 1 || dnum % 5 === 0 ? dnum : '') : U.DIAS_CURTO[U.weekdayOf(x.d)];
             const tip = `${U.fmtDiaCurto(x.d)}: ${U.fmtDur(x.sec)}`;
             return `<button type="button" class="day-bar${x.d === today ? ' today' : ''}" data-action="cal-open" data-date="${x.d}" title="${esc(tip)}" aria-label="${esc(tip)}">
               <span class="bar-area"><i style="height:${x.sec >= 60 ? Math.max(3, (x.sec * 100) / max) : 0}%"></i></span>
@@ -4000,6 +4023,10 @@ document.addEventListener('change', (e) => {
     if (!file) return;
     if (file.size > 5_000_000) return toast('Arquivo grande demais para importar.');
     file.text().then(startImport, (err) => toast(errMsg(err)));
+  } else if (t.matches('[data-rel-data]')) {
+    if (!t.value) return;
+    S[t.dataset.relData] = t.value;
+    render();
   } else if (t.matches('[data-ident-cli], [data-ident-serv]')) {
     identSync(t.form);
   } else if (t.matches('[data-cat-select]')) {

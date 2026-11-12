@@ -4757,3 +4757,8 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-transf-f { align-items: flex-end; }
 .fin-transf-f > .btn { flex: 0 0 auto; min-height: 42px; }
 @media (max-width: 420px) { .fin-transf-f > .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* v29: Relatórios, período personalizado */
+.rel-datas { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; padding: 12px; margin: -6px 0 16px; }
+.rel-datas .field { flex: 1 1 150px; margin: 0; }
+.rel-datas p { flex-basis: 100%; margin: 0; }
