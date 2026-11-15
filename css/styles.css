@@ -4792,3 +4792,33 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
   .page-head:has(.daynav) .head-btns .btn { flex: 1; width: auto; padding: 0 14px; justify-content: center; }
   .page-head:has(.daynav) .head-btns .btn.soft span { display: inline; }
 }
+
+/* v31: tarefas no mesmo horário mostram o nome inteiro (até 2 linhas) */
+.block.narrow .block-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.block.narrow.short { align-items: center; }
+.block.narrow.short .b-text { flex-direction: column; align-items: stretch; gap: 0; }
+.block.narrow.short .block-title { font-size: 12px; line-height: 1.2; }
+@media (max-width: 899px) {
+  /* No celular o nome vem primeiro: os botões pequenos saem (tocar no nome abre o cronômetro e as notas) */
+  .block.narrow.short .b-tools:not(:has(.timer.running)) { display: none; }
+  .block.narrow.short .timer-chip { display: none; }
+}
+
+/* v31: Iniciar por categoria e "Comecei:" já com a hora */
+.start-so { width: 100%; margin-top: 4px; justify-content: center; }
+.comecei-marcado { align-self: center; }
+.modal-body.start { grid-template-columns: minmax(0, 1fr); }
+.modal-body.start .modal-head h2 { min-width: 0; }
+.pick-new input { width: 0; }
+.pick-new .btn { flex: none; }
+@media (max-width: 560px) {
+  /* Tarefa curta com o cronômetro rodando: o nome aparece no lugar do horário */
+  .block.short.running .block-time { display: none; }
+  .block.short .block-title { min-width: 0; }
+}

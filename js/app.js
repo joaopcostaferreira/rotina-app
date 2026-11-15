@@ -1567,13 +1567,15 @@ function openStart({ cli, cat, item, bloco } = {}) {
   const c = cliById(cli);
   const k = catById(cat);
   const it = itensOf(k).find((x) => x.id === item);
-  const back = `<button type="button" class="icon-btn" data-action="start-pick" aria-label="Voltar">${icon('left')}</button>`;
+  const voltarPara = (attrs = '') => `<button type="button" class="icon-btn" data-action="start-pick" ${attrs} data-bloco="${bloco || ''}" aria-label="Voltar">${icon('left')}</button>`;
+  const back = voltarPara();
   const grid = (btns) => `<div class="pick-grid">${btns}</div>`;
+  const fechar = `<button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button>`;
 
   if (c) {
     const servs = servicosOf(c);
     openModal(`<div class="modal-body start" data-start-cli="${c.id}" data-start-bloco="${bloco || ''}">
-      <header class="modal-head">${back}<h2>${esc(c.nome)}</h2>
+      <header class="modal-head">${voltarPara(`data-cat="${workCatId() || ''}"`)}<h2>${esc(c.nome)}</h2>
         <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
       ${
         c.pedeNome
@@ -1595,7 +1597,7 @@ function openStart({ cli, cat, item, bloco } = {}) {
     const subs = subsOf(k);
     if (!subs.length) return askComecei({ catId: k.id, itemId: it.id, bloco });
     openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-item="${it.id}" data-start-bloco="${bloco || ''}">
-      <header class="modal-head">${back}<h2>${esc(it.nome)}</h2>
+      <header class="modal-head">${voltarPara(`data-cat="${k.id}"`)}<h2>${esc(it.nome)}</h2>
         <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
       <h3 class="pick-title">O que vai fazer? <em>opcional</em></h3>
       ${grid(
@@ -1605,44 +1607,70 @@ function openStart({ cli, cat, item, bloco } = {}) {
     </div>`);
     return;
   }
-  // Escolha inicial: clientes ativos e as listas (só a categoria pedida, quando vem de um bloco da rotina).
-  // Bloco da rotina: Trabalho mostra só os clientes; uma lista (ex.: Cursos) mostra só os itens dela.
-  const cats = k ? (isWork(k.id) ? [] : [k]) : listCats();
-  const clis = k && !isWork(k.id) ? [] : startClients();
-  const sec = (titulo, btns) => (btns ? `<h3 class="pick-title">${titulo}</h3>${grid(btns)}` : '');
+  if (k) {
+    // Trabalho: os clientes. Categoria com lista (ex.: Cursos): os itens dela.
+    if (isWork(k.id) || itensOf(k).length) {
+      const clis = isWork(k.id) ? startClients() : [];
+      const btns = isWork(k.id)
+        ? clis.map((x) => `<button type="button" class="pick" data-action="start-pick" data-cli="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('')
+        : itensOf(k).map((x) => `<button type="button" class="pick" data-action="start-pick" data-cat="${k.id}" data-item="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('');
+      openModal(`<div class="modal-body start">
+        <header class="modal-head">${back}<h2>${esc(k.nome)}</h2>${fechar}</header>
+        <h3 class="pick-title">${isWork(k.id) ? 'Qual cliente?' : 'Qual?'}</h3>
+        ${btns ? grid(btns) : '<p class="muted">Nenhum cliente ativo. Cadastre em Clientes.</p>'}
+      </div>`);
+      return;
+    }
+    // Categoria sem lista (ex.: Religião, Saúde): o que vai fazer? Os nomes usados antes viram botões.
+    const sug = (k.sugestoes || []).filter(Boolean);
+    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-bloco="${bloco || ''}">
+      <header class="modal-head">${back}<h2>${esc(k.nome)}</h2>${fechar}</header>
+      <h3 class="pick-title">O que você vai fazer?</h3>
+      ${sug.length ? grid(sug.map((x) => `<button type="button" class="pick" data-action="start-go" data-serv="${esc(x)}">${icon('play')}${esc(x)}</button>`).join('')) : ''}
+      <form class="pick-new" data-form="start-livre">
+        <input name="nome" maxlength="60" autocomplete="off" placeholder="${sug.length ? 'Outra coisa' : 'Ex.: Igreja'}" ${sug.length ? '' : 'autofocus'}>
+        <button type="submit" class="btn soft">${icon('plus')}Criar e iniciar</button>
+      </form>
+      <button type="button" class="pick soft start-so" data-action="start-go" data-serv="">${icon('play')}Não, só iniciar ${esc(k.nome)}</button>
+    </div>`);
+    return;
+  }
+  // Escolha inicial: todas as categorias.
+  const cats = S.categories.filter((cc) => !isWork(cc.id) || startClients().length);
   openModal(`<div class="modal-body start">
     ${modalHead('Iniciar tarefa')}
-    ${sec('Clientes', clis.map((x) => `<button type="button" class="pick" data-action="start-pick" data-cli="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${workColor()}"></i>${esc(x.nome)}</button>`).join(''))}
-    ${cats
-      .map((cc) =>
-        sec(
-          esc(cc.nome),
-          itensOf(cc)
-            .map((x) => `<button type="button" class="pick" data-action="start-pick" data-cat="${cc.id}" data-item="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${cc.cor}"></i>${esc(x.nome)}</button>`)
-            .join(''),
-        ),
-      )
-      .join('')}
-    ${!clis.length && !cats.some((cc) => itensOf(cc).length) ? '<p class="muted">Cadastre clientes ou uma lista numa categoria (ex.: Cursos) para iniciar por aqui.</p>' : ''}
+    <h3 class="pick-title">O que você vai fazer?</h3>
+    ${
+      cats.length
+        ? grid(cats.map((cc) => `<button type="button" class="pick" data-action="start-pick" data-cat="${cc.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${cc.cor}"></i>${esc(cc.nome)}</button>`).join(''))
+        : '<p class="muted">Crie uma categoria para iniciar por aqui.</p>'
+    }
   </div>`);
 }
 
 // Último passo antes do play: "Comecei:" com a hora em branco e o botão "Comecei agora" (vira "OK" com a hora preenchida).
 function askComecei(p) {
-  const c = cliById(p.cliId);
-  const it = itensOf(catById(p.catId)).find((x) => x.id === p.itemId);
-  const nome = c ? [p.servico || c.nome, p.pessoa].filter(Boolean).join(' · ') : [it?.nome, p.servico].filter(Boolean).join(' · ');
-  const sub = c && p.servico ? c.nome : '';
-  const voltar = c ? `data-cli="${c.id}"` : `data-cat="${p.catId || ''}" data-item="${p.itemId || ''}"`;
+  const t = p.taskId ? findTask(p.taskId, p.date) : null;
+  const c = cliById(t ? t.clienteId : p.cliId);
+  const k = catById(p.catId);
+  const it = itensOf(k).find((x) => x.id === p.itemId);
+  const nome = t ? t.titulo : c ? [p.servico || c.nome, p.pessoa].filter(Boolean).join(' · ') : [it?.nome, p.servico].filter(Boolean).join(' · ') || k?.nome || '';
+  const sub = t ? taskSub(t) : c && p.servico ? c.nome : !it && p.servico ? k?.nome || '' : '';
+  const voltar = t ? '' : c ? `data-cli="${c.id}"` : `data-cat="${p.catId || ''}" data-item="${p.itemId || ''}"`;
+  const agora = U.fromMin(U.nowMin());
+  // Tarefa marcada para um horário que já passou: um toque coloca esse horário.
+  const marcado = t?.horario && t.data === U.todayStr() && U.toMin(t.horario) < U.nowMin() ? t.horario : '';
   openModal(`<form class="modal-body start comecei" data-form="comecei" data-p="${esc(JSON.stringify(p))}">
     <header class="modal-head">
-      <button type="button" class="icon-btn" data-action="start-pick" ${voltar} data-bloco="${p.bloco || ''}" aria-label="Voltar">${icon('left')}</button>
+      ${t ? '' : `<button type="button" class="icon-btn" data-action="start-pick" ${voltar} data-bloco="${p.bloco || ''}" aria-label="Voltar">${icon('left')}</button>`}
       <h2>${esc(nome)}</h2>
       <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
     ${sub ? `<p class="muted sm comecei-sub">${esc(sub)}</p>` : ''}
-    <label class="comecei-campo"><span>Comecei:</span><input type="time" name="ini" data-comecei aria-label="Horário em que começou"></label>
+    <label class="comecei-campo"><span>Comecei:</span><input type="time" name="ini" data-comecei value="${agora}" aria-label="Horário em que começou"></label>
+    ${marcado ? `<button type="button" class="btn ghost sm comecei-marcado" data-action="comecei-hora" data-hora="${marcado}">Comecei às ${marcado} (horário da tarefa)</button>` : ''}
+    <p class="muted sm">Já vem com a hora de agora. Se começou antes, mude. O fim fica em aberto: o cronômetro vai rodando.</p>
     <footer class="modal-actions">
-      <button type="submit" class="btn primary comecei-btn" data-comecei-btn>${icon('play')}<span>Comecei agora</span></button>
+      <button type="submit" class="btn primary comecei-btn" data-comecei-btn>${icon('play')}<span>Iniciar</span></button>
     </footer>
   </form>`);
 }
@@ -1655,7 +1683,10 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
   const it = itensOf(catById(categoriaId)).find((x) => x.id === itemId);
   servico = servico.trim();
   pessoa = pessoa.trim();
-  const titulo = c ? [servico || c.nome, pessoa].filter(Boolean).join(' · ') : [it?.nome, servico].filter(Boolean).join(' · ');
+  const titulo = c
+    ? [servico || c.nome, pessoa].filter(Boolean).join(' · ')
+    : [it?.nome, servico].filter(Boolean).join(' · ') || catById(categoriaId)?.nome || 'Tarefa';
+  const livre = !c && !it; // categoria sem lista (ex.: Religião → Igreja)
   const ops = [];
   // Mesmo cliente/curso + mesmo serviço já aberto hoje: continua a mesma tarefa.
   let t = visible(list).find(
@@ -1664,7 +1695,11 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
       x.categoriaId === categoriaId &&
       (x.clienteId || null) === (c?.id || null) &&
       (x.itemId || null) === (it?.id || null) &&
-      (c ? norm(x.servico || x.titulo) === norm(servico) && norm(x.pessoa) === norm(pessoa) : norm(x.servico) === norm(servico) && !x.horario),
+      (c
+        ? norm(x.servico || x.titulo) === norm(servico) && norm(x.pessoa) === norm(pessoa)
+        : livre
+          ? norm(x.titulo) === norm(titulo)
+          : norm(x.servico) === norm(servico) && !x.horario),
   );
   if (!t) {
     t = {
@@ -3340,7 +3375,10 @@ const FORMS = {
     t.sessoes = sessoes;
     t.tempoGasto = tempoGasto;
     closeModal();
-    setDone(t, true, { sessoes, tempoGasto });
+    // Tarefa com horário: passa a ficar no horário em que foi feita.
+    const extra = { sessoes, tempoGasto };
+    if (t.horario) Object.assign(extra, { horario: U.fromMin(ini), duracao: fim - ini, fimAberto: false });
+    setDone(t, true, extra);
   },
 
   'start-novo'(form) {
@@ -3360,16 +3398,42 @@ const FORMS = {
     try {
       p = JSON.parse(form.dataset.p || '{}');
     } catch {}
+    const t = p.taskId ? findTask(p.taskId, p.date) : null;
     const v = form.elements.ini.value;
+    let ini = null;
     if (v) {
-      const ini = tsOf(U.todayStr(), U.toMin(v));
+      ini = tsOf(t?.data || U.todayStr(), U.toMin(v));
       if (ini > Date.now() + 60_000) {
         form.elements.ini.focus();
         return toast('Esse horário ainda não chegou.');
       }
-      p.inicio = ini;
+      // Hora de agora (sem mudar): começa no segundo exato, não no minuto cheio.
+      if (Date.now() - ini < 60_000) ini = null;
     }
+    if (p.taskId) {
+      if (!t) return closeModal();
+      const ops = [];
+      if (S.pedirConclusao === t.id) S.pedirConclusao = null;
+      startTimer(t, ops, ini || Date.now());
+      closeModal();
+      render();
+      persist(db.batch(ops));
+      return toast(`Cronômetro ligado${ini ? ` desde ${hhmm(t.cronometroInicio)}` : ''}: ${t.titulo}`);
+    }
+    if (ini) p.inicio = ini;
     return startTask(p);
+  },
+
+  'start-livre'(form) {
+    const box = form.closest('.modal-body');
+    const k = catById(box.dataset.startCat);
+    const nome = form.elements.nome.value.trim();
+    if (!nome) return form.elements.nome.focus();
+    if (k && !(k.sugestoes || []).some((x) => norm(x) === norm(nome))) {
+      k.sugestoes = [nome, ...(k.sugestoes || [])].slice(0, 20);
+      persist(db.update('categories', k.id, { sugestoes: k.sugestoes }));
+    }
+    return askComecei({ catId: box.dataset.startCat, servico: nome, bloco: box.dataset.startBloco });
   },
 
   async daily(form) {
@@ -3714,6 +3778,12 @@ const ACTIONS = {
     if (t) setDone(t, true);
   },
   'start-pick': ({ cli, cat, item, bloco }) => openStart({ cli, cat, item, bloco }),
+  'comecei-hora': ({ hora }) => {
+    const inp = modal.querySelector('[data-comecei]');
+    if (!inp) return;
+    inp.value = hora;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  },
   'start-go': ({ serv }, el) => {
     const box = el.closest('.modal-body');
     const pessoa = box.querySelector('[data-start-pessoa]');
@@ -3783,6 +3853,7 @@ const ACTIONS = {
     // Bloco da rotina de Cursos (lista) ou de Trabalho sem cliente: primeiro escolhe o curso ou o cliente.
     const escolher = itensOf(catById(t.categoriaId)).length || (isWork(t.categoriaId) && !t.clienteId && startClients().length);
     if (!run && !t.itemId && !elapsed(t) && escolher) return openStart({ cat: t.categoriaId, bloco: t.data === U.todayStr() ? t.id : '' });
+    if (!run && !elapsed(t)) return askComecei({ taskId: t.id, date: t.data });
     const detailOpen = modal.open && modal.dataset.detail === id;
     if (run) {
       stopTimer(t, ops);
@@ -4014,7 +4085,7 @@ document.addEventListener('change', (e) => {
   if (FIN.onChange(t)) return;
   if (t.matches('[data-comecei]')) {
     const b = t.form.querySelector('[data-comecei-btn] span');
-    if (b) b.textContent = t.value ? 'OK' : 'Comecei agora';
+    if (b) b.textContent = t.value ? 'Iniciar' : 'Comecei agora';
     return;
   }
   if (t.matches('[data-import-file]')) {
@@ -4066,7 +4137,7 @@ document.addEventListener('input', (e) => {
   if (FIN.onInput(el)) return;
   if (el.matches('[data-comecei]')) {
     const b = el.form.querySelector('[data-comecei-btn] span');
-    if (b) b.textContent = el.value ? 'OK' : 'Comecei agora';
+    if (b) b.textContent = el.value ? 'Iniciar' : 'Comecei agora';
   } else if (el.matches('[data-horario]')) {
     const form = el.form;
     const group = form.querySelector('[data-aviso-group]');
