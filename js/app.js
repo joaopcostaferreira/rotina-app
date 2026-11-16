@@ -603,7 +603,7 @@ function dayNav(date) {
 
 // Passou do horário (ou o dia já passou) e ainda não foi concluída: continua pendente, marcada como atrasada.
 function isLate(t) {
-  if (fechada(t)) return false;
+  if (fechada(t) || isRunning(t)) return false;
   const today = U.todayStr();
   if (t.data < today) return true;
   return t.data === today && !!t.horario && U.toMin(t.horario) + duracao(t) <= U.nowMin();
@@ -667,6 +667,46 @@ function startMinOf(t) {
   return elapsed(t) >= 60 && t.horario ? U.toMin(t.horario) : null;
 }
 
+// Horário real de uma tarefa, em minutos desde a meia-noite do dia dela (passa de 1440 quando atravessa a meia-noite).
+// Com sessões: do começo da 1ª ao fim da última (rodando = agora). Sem sessões: o horário planejado.
+function spanOf(t) {
+  const ss = (t.sessoes || []).filter((x) => x.i);
+  if (ss.length) {
+    const base = U.parseYmd(t.data).getTime();
+    const run = isRunning(t);
+    const i = Math.min(...ss.map((x) => x.i));
+    const f = Math.max(...ss.map((x) => x.f || (run ? Date.now() : x.i)));
+    const s = Math.floor((i - base) / 60_000);
+    return { s, e: Math.max(s + 1, Math.round((f - base) / 60_000)), real: true, aberto: run };
+  }
+  if (!t.horario) return null;
+  const s = U.toMin(t.horario);
+  return { s, e: s + duracao(t), real: false, aberto: !!t.fimAberto };
+}
+const minTxt = (m) => U.fromMin(((Math.round(m) % 1440) + 1440) % 1440);
+// "09:00–10:30", "20:00–02:00 (+1 dia)", "14:00–agora", "19:00 · sem hora de fim".
+function spanTxt(sp) {
+  if (!sp) return '';
+  if (sp.aberto) return sp.real ? `${minTxt(sp.s)}–agora` : `${minTxt(sp.s)} · sem hora de fim`;
+  const dias = Math.floor((sp.e - 1) / 1440) - Math.floor(sp.s / 1440);
+  return `${minTxt(sp.s)}–${minTxt(sp.e)}${dias > 0 ? ` (+${dias} dia${dias > 1 ? 's' : ''})` : ''}`;
+}
+// Cronômetros rodando em qualquer dia já carregado (ex.: começou ontem às 20h e ainda não parou).
+const runningTasks = () => Object.values(S.days).flatMap((l) => (l || []).filter((t) => !t.removido && isRunning(t)));
+// Tarefas de até 3 dias antes que atravessaram a meia-noite e ainda tomam parte de `date`.
+function carryOver(date) {
+  const out = [];
+  for (let k = 1; k <= 3; k++) {
+    for (const t of visible(S.days[U.addDays(date, -k)])) {
+      const sp = spanOf(t);
+      if (sp?.real && sp.e > k * 1440) out.push({ t, off: k * 1440 });
+    }
+  }
+  return out;
+}
+const pararBtn = (t, cls = '') =>
+  `<button type="button" class="btn primary parar ${cls}" data-action="parar" data-id="${t.id}" data-date="${t.data}" title="Parar: ${esc(t.titulo)}">${icon('stop')}<span>Parar</span></button>`;
+
 // Subtítulo de uma tarefa: categoria · cliente/curso · pessoa.
 const taskSub = (t) => [catById(t.categoriaId)?.nome, cliById(t.clienteId)?.nome, itemOf(t)?.nome].filter(Boolean).join(' · ');
 
@@ -701,7 +741,7 @@ function taskRow(t, { showCat = false } = {}) {
   const late = isLate(t);
   const meta = [
     late ? `<span class="chip late">Atrasada</span>` : '',
-    t.horario ? `<span class="chip">${icon('horarios')}${t.horario}</span>` : '',
+    spanOf(t) ? `<span class="chip">${icon('horarios')}${spanTxt(spanOf(t))}</span>` : '',
     t.horario && avisoAtivo(t) && !fechada(t)
       ? `<span class="chip muted" title="Aviso ${avisoMin(t) ? `${avisoMin(t)} min antes` : 'na hora'}">${icon('sino')}${avisoMin(t) ? `${avisoMin(t)} min` : 'na hora'}</span>`
       : '',
@@ -791,8 +831,9 @@ function viewPainel() {
     .join('');
 
   // Clientes e listas (ex.: Cursos): ▶ ao lado de cada um para começar na hora.
+  const rodando = runningTasks();
   const startRow = ({ nome, cor, pred, attrs }) => {
-    const run = v.find((t) => isRunning(t) && pred(t));
+    const run = rodando.find(pred);
     const sec = sumTime(v.filter(pred));
     return `<li style="--c:${cor}"><i class="dot"></i><span class="name">${esc(nome)}</span>
       ${
@@ -830,7 +871,7 @@ function viewPainel() {
     <div><p class="eyebrow">${esc(U.fmtDiaLongo(today))} · ${clockHTML()}</p><h1>${saud}, ${esc(firstName())}</h1></div>
     <div class="head-btns">
       <button type="button" class="btn soft" data-action="new-daily" data-date="${today}">${icon('plus')}<span>Tarefa</span></button>
-      <button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>
+      ${rodando.length ? pararBtn(rodando[0]) : `<button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>`}
     </div>
   </header>
   <div class="dash">
@@ -845,13 +886,13 @@ function viewPainel() {
     </section>
     <section class="card now">
       <h2 class="card-title">${icon('horarios')}Agora</h2>
-      ${v
-        .filter(isRunning)
+      ${rodando
         .map(
           (t) => `<div class="running-now" style="--c:${colorOf(t)}">
             <span class="running-icon">${icon('cronometro')}</span>
-            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}<strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
-            <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro">${icon('pause')}</button>
+            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}desde ${hhmm(t.cronometroInicio)}${t.data !== today ? ` de ${esc(U.relativo(t.data).toLowerCase())}` : ''} · <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
+            <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro" title="Pausar">${icon('pause')}</button>
+            <button type="button" class="icon-btn sm stop-btn" data-action="parar" data-id="${t.id}" data-date="${t.data}" aria-label="Parar e concluir" title="Parar">${icon('stop')}</button>
           </div>`,
         )
         .join('')}
@@ -909,31 +950,69 @@ function blockTools(t, { compact = false } = {}) {
   </div>`;
 }
 
+// Resumo do dia (ao lado da agenda): cada tarefa com o horário, a situação e o tempo gasto.
+function resumoRow({ t, vinda }) {
+  const sp = spanOf(t);
+  const sec = elapsed(t);
+  const run = isRunning(t);
+  const estado = t.concluido ? 'Feita' : t.naoFeito ? 'Não feita' : run ? 'Rodando' : isLate(t) ? 'Atrasada' : 'Pendente';
+  const meta = [sp ? spanTxt(sp) : 'Sem horário', vinda ? `começou ${U.relativo(t.data).toLowerCase()}` : ''].filter(Boolean).join(' · ');
+  return `<li class="rs${t.concluido ? ' done' : ''}${t.naoFeito ? ' nf' : ''}${run ? ' running' : ''}" style="--c:${colorOf(t)}">
+    <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
+      data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
+    <button type="button" class="rs-main" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir">
+      <span class="rs-title">${esc(t.titulo)}</span>
+      <span class="rs-meta">${esc(meta)} · <b class="rs-st">${estado}</b></span>
+    </button>
+    <span class="rs-time${run ? ' on' : sec >= 60 ? '' : ' none'}" ${run ? liveAttrs(t) : ''} title="Tempo gasto">${run ? U.fmtRelogio(sec) : sec >= 60 ? U.fmtDur(sec) : '—'}</span>
+  </li>`;
+}
+
 function viewHoje() {
   const tasks = dayTasks(S.date);
+  const today = U.todayStr();
+  const rodando = runningTasks();
   const head = `<header class="page-head">${dayNav(S.date)}
     <div class="head-btns">
-      <button type="button" class="btn ${S.date === U.todayStr() ? 'soft' : 'primary'}" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button>
-      ${S.date === U.todayStr() ? `<button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>` : ''}
+      <button type="button" class="btn ${S.date === today ? 'soft' : 'primary'}" data-action="new-daily" data-date="${S.date}">${icon('plus')}<span>Tarefa</span></button>
+      ${S.date === today ? (rodando.length ? pararBtn(rodando[0]) : `<button type="button" class="btn primary" data-action="start-pick">${icon('play')}<span>Iniciar</span></button>`) : ''}
     </div></header>`;
   if (!tasks) return head + loading();
+  // Os dias de antes: uma tarefa que começou ontem e passou da meia-noite aparece aqui também.
+  if (S.date <= today) ensureRange(U.addDays(S.date, -3), U.addDays(S.date, -1));
   const v = visible(tasks);
-  if (!v.length) {
+  const vindas = carryOver(S.date);
+  if (!v.length && !vindas.length) {
     return head + emptyState('Nada para este dia', 'Monte sua <a href="#/rotina">rotina semanal</a> ou adicione uma tarefa só para este dia.');
   }
   const p = progress(tasks);
-  const timed = v.filter((t) => t.horario).sort(U.byHorarioTitulo);
-  const untimed = v.filter((t) => !t.horario).sort(U.byHorarioTitulo);
-  const isToday = S.date === U.todayStr();
+  const isToday = S.date === today;
   const now = U.nowMin();
+
+  // Cada tarefa no horário em que foi feita (sessões do cronômetro) ou, se ainda não foi, no planejado.
+  const items = [];
+  for (const t of v) {
+    const sp = spanOf(t);
+    if (!sp) continue;
+    const s = Math.max(0, sp.s);
+    const e = Math.min(1440, sp.e);
+    if (e > s) items.push({ t, s, e, sp });
+  }
+  for (const { t, off } of vindas) {
+    const sp = spanOf(t);
+    const s = Math.max(0, sp.s - off);
+    const e = Math.min(1440, sp.e - off);
+    if (e > s) items.push({ t, s, e, sp, vinda: true });
+  }
+  items.sort((a, b) => a.s - b.s || a.e - b.e || (a.t.titulo || '').localeCompare(b.t.titulo || '', 'pt-BR'));
+  const naAgenda = new Set(items.map((x) => x.t));
 
   let start = (S.profile.agendaInicio ?? 6) * 60;
   let end = Math.max((S.profile.agendaFim ?? 23) * 60, start + 60);
-  for (const t of timed) {
-    start = Math.min(start, Math.floor(U.toMin(t.horario) / 60) * 60);
-    end = Math.max(end, Math.min(24 * 60, Math.ceil((U.toMin(t.horario) + duracao(t)) / 60) * 60));
+  for (const x of items) {
+    start = Math.min(start, Math.floor(x.s / 60) * 60);
+    end = Math.max(end, Math.min(24 * 60, Math.ceil(x.e / 60) * 60));
   }
-  const items = timed.map((t) => ({ t, s: U.toMin(t.horario), e: Math.min(U.toMin(t.horario) + duracao(t), 24 * 60) }));
 
   // Altura de cada hora e a posição (px) de cada minuto.
   const hours = [];
@@ -971,19 +1050,20 @@ function viewHoje() {
   if (cluster.length) flush();
 
   const blocks = items
-    .map(({ t, s, e, col, cols }) => {
+    .map(({ t, s, e, sp, vinda, col, cols }) => {
       const cli = cliById(t.clienteId);
       const isNow = isToday && s <= now && now < e;
       const altura = y(e) - y(s);
       const short = altura < 60;
       const late = isLate(t);
-      const sub = [cli?.nome, itemOf(t)?.nome, late ? 'Atrasada' : '', t.naoFeito ? 'Não feito' : ''].filter(Boolean).join(' · ');
+      const sub = [cli?.nome, itemOf(t)?.nome, vinda ? `começou ${U.relativo(t.data).toLowerCase()}` : '', late ? 'Atrasada' : '', t.naoFeito ? 'Não feito' : ''].filter(Boolean).join(' · ');
+      const quando = vinda ? `${U.fromMin(s)}–${sp.aberto ? 'agora' : minTxt(e)}` : spanTxt(sp);
       return `<div class="block${t.concluido ? ' done' : ''}${t.naoFeito ? ' nf' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
         style="--c:${colorOf(t)};top:${y(s)}px;height:${altura}px;left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})">
         <button type="button" class="check b-check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
           data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
         <div class="b-text" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir cronômetro e notas">
-          <span class="block-time">${t.fimAberto ? `${t.horario} · sem hora de fim` : `${t.horario}–${U.fromMin(e)}`}</span>
+          <span class="block-time">${quando}</span>
           <span class="block-title">${esc(t.titulo)}</span>
           ${sub ? `<span class="block-sub">${esc(sub)}</span>` : ''}
         </div>
@@ -1001,6 +1081,14 @@ function viewHoje() {
       : '';
   const tempo = sumTime(v);
   const perdido = sumDesperdicio(v);
+  const resumo = [...vindas.map(({ t }) => ({ t, vinda: true })), ...v.map((t) => ({ t }))].sort((a, b) => {
+    const x = spanOf(a.t);
+    const z = spanOf(b.t);
+    const sa = x ? x.s - (a.vinda ? 99_999 : 0) : 99_999;
+    const sb = z ? z.s - (b.vinda ? 99_999 : 0) : 99_999;
+    return sa - sb || (a.t.titulo || '').localeCompare(b.t.titulo || '', 'pt-BR');
+  });
+  const pend = v.filter((t) => !fechada(t)).length;
 
   return `${head}
   <div class="progress-line"><span class="bar"><i style="width:${p.pct}%"></i></span>
@@ -1009,18 +1097,16 @@ function viewHoje() {
   <div class="agenda-wrap">
     <div class="card timeline-card">
       ${
-        timed.length
+        items.length
           ? `<div class="timeline" style="height:${total}px">${hourLines}<div class="blocks">${blocks}</div>${nowLine}</div>`
           : '<p class="muted">Nenhuma tarefa com horário neste dia.</p>'
       }
     </div>
-    <aside class="card untimed">
-      <h2 class="card-title">Sem horário <span class="count">${untimed.length}</span></h2>
-      ${
-        untimed.length
-          ? `<ul class="tasks">${untimed.map((t) => taskRow(t, { showCat: true })).join('')}</ul>`
-          : '<p class="muted sm">Todas as tarefas têm horário.</p>'
-      }
+    <aside class="card untimed resumo">
+      <h2 class="card-title">${icon('hoje')}Resumo do dia <span class="count">${resumo.length}</span></h2>
+      <p class="rs-tot"><span class="ok">${icon('check')}${p.done} feita${p.done === 1 ? '' : 's'}</span>${p.nao ? `<span class="nf">${icon('x')}${p.nao} não feita${p.nao === 1 ? '' : 's'}</span>` : ''}${pend ? `<span>${pend} pendente${pend === 1 ? '' : 's'}</span>` : ''}${tempo >= 60 ? `<span>${icon('cronometro')}${U.fmtDur(tempo)}</span>` : ''}</p>
+      <ul class="rs-list">${resumo.map(resumoRow).join('')}</ul>
+      ${v.some((t) => !naAgenda.has(t)) ? '<p class="muted sm">Sem horário: toque no ▶ ou no ✓ e diga a hora para ela entrar na agenda.</p>' : ''}
     </aside>
   </div>`;
 }
@@ -1042,21 +1128,25 @@ function viewCalendario() {
       d === today ? 'today' : '',
       d === S.calSel ? 'sel' : '',
       p && p.total && p.done === p.total ? 'full' : '',
+      p && p.total && p.done + p.nao === p.total ? 'marcado' : '',
       d < today ? 'past' : '',
     ].join(' ');
     cells += `<button type="button" class="${cls}" data-action="cal-pick" data-date="${d}"
-      aria-label="${esc(U.fmtDiaLongo(d))}${p && p.total ? `, ${p.done} de ${p.total} concluídas` : ''}">
+      aria-label="${esc(U.fmtDiaLongo(d))}${p && p.total ? `, ${p.done} de ${p.total} concluídas${p.nao ? `, ${p.nao} não feitas` : ''}` : ''}">
       <span class="cal-num">${Number(d.slice(8))}</span>
-      ${p && p.total ? `<span class="cal-meter"><i style="width:${p.pct}%"></i></span><span class="cal-count">${p.done}/${p.total}</span>` : ''}
+      ${p && p.total ? `<span class="cal-meter"><i class="ok" style="width:${(p.done * 100) / p.total}%"></i><i class="nf" style="width:${(p.nao * 100) / p.total}%"></i></span><span class="cal-count">${p.done}/${p.total}</span>` : ''}
     </button>`;
   }
 
   const tasks = dayTasks(S.calSel);
   let panel = loading();
   if (tasks) {
-    const v = visible(tasks).sort(U.byHorarioTitulo);
+    const v = visible(tasks).sort((a, b) => (spanOf(a)?.s ?? 99_999) - (spanOf(b)?.s ?? 99_999) || U.byHorarioTitulo(a, b));
     const removed = tasks.filter((t) => t.removido);
+    const pp = progress(tasks);
+    const tt = sumTime(v);
     panel = `
+      ${v.length ? `<p class="rs-tot"><span class="ok">${icon('check')}${pp.done} de ${pp.total} feita${pp.done === 1 ? '' : 's'}</span>${pp.nao ? `<span class="nf">${icon('x')}${pp.nao} não feita${pp.nao === 1 ? '' : 's'}</span>` : ''}${tt >= 60 ? `<span>${icon('cronometro')}${U.fmtDur(tt)}</span>` : ''}</p>` : ''}
       ${v.length ? `<ul class="tasks">${v.map((t) => taskRow(t, { showCat: true })).join('')}</ul>` : '<p class="muted day-empty">Nenhuma tarefa neste dia.</p>'}
        <button type="button" class="btn soft full" data-action="new-daily" data-date="${S.calSel}">${icon('plus')}Adicionar tarefa só neste dia</button>
       ${
@@ -1333,7 +1423,7 @@ function openTaskDetail(t) {
   openModal(`<div class="modal-body detail" style="--c:${colorOf(t)}">
     <header class="modal-head">
       <div class="detail-title">
-        <p class="eyebrow">${esc([U.fmtDiaLongo(t.data), t.horario].filter(Boolean).join(' · '))}</p>
+        <p class="eyebrow">${esc([U.fmtDiaLongo(t.data), spanTxt(spanOf(t))].filter(Boolean).join(' · '))}</p>
         <h2>${esc(t.titulo)}</h2>
         ${sub ? `<p class="muted sm"><i class="dot"></i>${sub}</p>` : ''}
       </div>
@@ -1347,8 +1437,8 @@ function openTaskDetail(t) {
       ${
         t.concluido || t.naoFeito
           ? `<span class="muted sm">${t.concluido ? 'Tarefa concluída' : 'Marcada como não feita'}</span>`
-          : `<button type="button" class="btn ${run ? 'primary' : 'soft'}" data-action="timer" data-id="${t.id}" data-date="${t.data}">
-              ${icon(run ? 'pause' : 'play')}${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'}</button>`
+          : `<span class="detail-btns"><button type="button" class="btn soft" data-action="timer" data-id="${t.id}" data-date="${t.data}">
+              ${icon(run ? 'pause' : 'play')}${run ? 'Pausar' : sec ? 'Continuar' : 'Iniciar'}</button>${run ? pararBtn(t, 'sm-btn') : ''}</span>`
       }
     </section>
     ${sessionsHTML(t)}
@@ -1361,6 +1451,7 @@ function openTaskDetail(t) {
     </div>
     <footer class="modal-actions">
       <button type="button" class="btn ghost sm" data-action="edit-daily" data-id="${t.id}" data-date="${t.data}">${icon('edit')}Editar</button>
+      ${!run && (t.concluido || t.sessoes?.length) ? `<button type="button" class="btn ghost sm" data-action="ajustar-hora" data-id="${t.id}" data-date="${t.data}">${icon('horarios')}Ajustar horário</button>` : ''}
       <span class="grow"></span>
       ${t.concluido ? '' : `<button type="button" class="btn ghost${t.naoFeito ? ' nf-on' : ''}" data-action="nao-feito" data-id="${t.id}" data-date="${t.data}">${icon(t.naoFeito ? 'undo' : 'x')}${t.naoFeito ? 'Desfazer não feito' : 'Não fiz'}</button>`}
       <button type="button" class="btn ${t.concluido ? 'ghost' : 'primary'}" data-action="toggle" data-id="${t.id}" data-date="${t.data}">
@@ -1516,37 +1607,98 @@ function identSync(form) {
   form.querySelector('#dl-ident-pessoas').innerHTML = (c?.pessoas || []).map((x) => `<option value="${esc(x)}">`).join('');
 }
 
-// Concluir: tarefa com horário e sem tempo registrado pergunta quanto tempo foi (já preenchido com o planejado).
-function openCheckTime(t) {
+// Concluir (ou ajustar depois): Início, Tempo gasto e Término.
+// Mudar o tempo gasto muda o término; mudar o término (ou o início) muda o tempo gasto. Só OK: conclui com as horas marcadas.
+// modo: 'concluir' | 'parar' (botão Parar, com "Só pausar") | 'ajustar' (tarefa já feita: só salva as horas).
+function openFinish(t, { modo = 'concluir' } = {}) {
+  const ss = (t.sessoes || []).filter((x) => x.i);
+  const run = isRunning(t);
+  const nowRel = Math.floor((Date.now() - U.parseYmd(t.data).getTime()) / 60_000);
   const isToday = t.data === U.todayStr();
-  let ini;
-  let fim;
-  if (t.horario) {
+  let ini = null; // minutos desde a meia-noite do dia da tarefa
+  let fim = null;
+  let gasto = null; // minutos
+  if (ss.length) {
+    const sp = spanOf(t);
+    ini = sp.s;
+    fim = run ? nowRel : sp.e;
+    gasto = Math.max(1, Math.round(elapsed(t) / 60));
+  } else if (t.horario) {
     ini = U.toMin(t.horario);
-    fim = t.fimAberto ? (isToday && U.nowMin() > ini ? U.nowMin() : null) : ini + duracao(t);
-  } else {
-    // Sem horário: hoje sugere "acabei agora"; em outro dia, os dois em branco.
-    fim = isToday ? U.nowMin() : null;
-    ini = fim == null ? null : Math.max(0, fim - duracao(t));
+    fim = t.fimAberto ? null : ini + duracao(t);
+    // Hoje, no meio do horário (ou sem hora de fim): terminou agora.
+    if (isToday && nowRel > ini && (fim == null || fim > nowRel)) fim = nowRel;
+    gasto = fim == null ? null : fim - ini;
+  } else if (isToday) {
+    fim = nowRel;
+    ini = Math.max(0, fim - duracao(t));
+    gasto = fim - ini;
   }
-  openModal(`<form class="modal-body" data-form="checktime" data-id="${t.id}" data-date="${t.data}" style="--c:${colorOf(t)}">
-    ${modalHead(`Concluir · ${esc(t.titulo)}`)}
-    <p class="muted sm">${!t.horario ? 'Que horas começou e terminou?' : t.fimAberto ? 'Que horas terminou?' : 'Foi esse o tempo? Se passou, mude o fim.'}</p>
-    <div class="row2">
-      <label class="field"><span>Começou</span><input type="time" name="ini" required value="${ini == null ? '' : U.fromMin(ini)}"></label>
-      <label class="field"><span>Terminou</span><input type="time" name="fim" required value="${fim == null ? '' : U.fromMin(fim % 1440)}" ${fim == null ? 'autofocus' : ''}></label>
+  const pausas = ss.length > 1 && fim - ini - gasto > 1;
+  const lastObs = ss[ss.length - 1]?.obs || '';
+  const titulo = modo === 'ajustar' ? 'Ajustar horário' : modo === 'parar' ? 'Parar' : 'Concluir';
+  openModal(`<form class="modal-body finish" data-form="finish" data-id="${t.id}" data-date="${t.data}" data-modo="${modo}"
+      data-off="${ini == null ? 0 : Math.floor(ini / 1440)}" style="--c:${colorOf(t)}">
+    ${modalHead(`${titulo} · ${esc(t.titulo)}`)}
+    ${taskSub(t) ? `<p class="muted sm"><i class="dot"></i>${esc(taskSub(t))}</p>` : ''}
+    <div class="fin3">
+      <label class="field"><span>Início</span><input type="time" name="ini" required data-fin="ini" value="${ini == null ? '' : minTxt(ini)}"></label>
+      <div class="field"><span>Tempo gasto</span>
+        <div class="dur-in">
+          <input type="number" name="gh" min="0" max="99" step="1" inputmode="numeric" data-fin="g" aria-label="Horas" value="${gasto == null ? '' : Math.floor(gasto / 60)}"><b>h</b>
+          <input type="number" name="gm" min="0" max="59" step="1" inputmode="numeric" data-fin="g" aria-label="Minutos" value="${gasto == null ? '' : gasto % 60}"><b>min</b>
+        </div></div>
+      <label class="field"><span>Término</span><input type="time" name="fim" required data-fin="fim" value="${fim == null ? '' : minTxt(fim)}" ${fim == null ? 'autofocus' : ''}></label>
     </div>
+    <p class="muted sm fin-dica" data-fin-dica>${pausas ? `Com pausas: ${U.fmtDur((fim - ini) * 60)} do começo ao fim, ${U.fmtDur(gasto * 60)} de trabalho. ` : ''}</p>
+    <label class="field"><span>O que você fez? <em>opcional</em></span>
+      <textarea name="obs" rows="2" maxlength="300" placeholder="Ex.: 5 vídeos editados">${esc(lastObs)}</textarea></label>
     <footer class="modal-actions">
-      <button type="button" class="btn ghost" data-action="check-semtempo" data-id="${t.id}" data-date="${t.data}">Concluir sem tempo</button>
+      ${modo === 'parar' ? `<button type="button" class="btn ghost" data-action="so-pausar" data-id="${t.id}" data-date="${t.data}">${icon('pause')}Só pausar</button>` : ''}
+      ${modo === 'concluir' && !ss.length ? `<button type="button" class="btn ghost" data-action="check-semtempo" data-id="${t.id}" data-date="${t.data}">Concluir sem tempo</button>` : ''}
+      ${modo === 'ajustar' ? '<button type="button" class="btn ghost" data-action="close-modal">Cancelar</button>' : ''}
       <span class="grow"></span>
-      <button type="submit" class="btn primary">${icon('check')}Registrar e concluir</button>
+      <button type="submit" class="btn primary">${icon('check')}${modo === 'ajustar' ? 'Salvar' : 'Concluir'}</button>
     </footer>
   </form>`);
+  finDica(modal.querySelector('form'));
+}
+const finGasto = (el) => (el.gh.value === '' && el.gm.value === '' ? null : (Number(el.gh.value) || 0) * 60 + (Number(el.gm.value) || 0));
+function finDica(form) {
+  const el = form.elements;
+  const ini = U.toMin(el.ini.value);
+  const g = finGasto(el);
+  const box = form.querySelector('[data-fin-dica]');
+  if (!box || ini == null || g == null) return;
+  const pausa = box.dataset.pausa ?? (box.dataset.pausa = box.textContent);
+  const avisos = [];
+  if (!form.dataset.mexeu && pausa) avisos.push(pausa.trim());
+  if (form.dataset.mexeu) avisos.push(`${U.fmtDur(g * 60)} no total.`);
+  if (ini + g >= 1440) avisos.push('Termina no dia seguinte.');
+  if (g > 16 * 60) avisos.push('Confira: mais de 16 horas.');
+  box.textContent = avisos.join(' ');
+}
+// Mexeu num dos três campos: acerta o outro.
+function finSync(form, campo) {
+  const el = form.elements;
+  form.dataset.mexeu = '1';
+  const ini = U.toMin(el.ini.value);
+  const fim = U.toMin(el.fim.value);
+  const g = finGasto(el);
+  if (campo === 'g') {
+    if (ini != null && g != null) el.fim.value = minTxt(ini + g);
+    else if (fim != null && g != null) el.ini.value = minTxt(fim - g);
+  } else if (ini != null && fim != null) {
+    let d = fim - ini;
+    if (d <= 0) d += 1440; // passou da meia-noite
+    el.gh.value = Math.floor(d / 60);
+    el.gm.value = d % 60;
+  } else if (campo === 'ini' && ini != null && g != null) el.fim.value = minTxt(ini + g);
+  finDica(form);
 }
 
 // Marca como concluída (ou reabre). Concluir para o cronômetro.
-function setDone(t, done, extra = {}) {
-  const ops = [];
+function setDone(t, done, extra = {}, ops = []) {
   if (done && isRunning(t)) stopTimer(t, ops);
   if (done && t.naoFeito) extra = { ...extra, naoFeito: false };
   t.concluido = done;
@@ -3085,6 +3237,9 @@ const defaultCat = (preferWork) =>
   (preferWork && S.categories.find((c) => /trabalho/i.test(c.nome))?.id) || S.categories[0]?.id || '';
 
 function openDailyForm(t) {
+  // Tarefa já feita: o formulário mostra o horário em que ela foi feita, não o planejado.
+  const sp = t.id && t.concluido ? spanOf(t) : null;
+  if (sp?.real && sp.s >= 0 && sp.s < 1440) t = { ...t, horario: U.fromMin(sp.s), duracao: Math.max(1, sp.e - sp.s), fimAberto: false };
   const editing = !!t.id;
   const fixa = editing && t.origem === 'fixa';
   const catId = t.categoriaId || (t.clienteId ? workCatId() : '') || defaultCat(false);
@@ -3361,24 +3516,57 @@ const FORMS = {
     next?.(t);
   },
 
-  checktime(form) {
+  finish(form) {
     const t = findTask(form.dataset.id, form.dataset.date);
     if (!t) return closeModal();
-    const ini = U.toMin(form.elements.ini.value);
-    let fim = U.toMin(form.elements.fim.value);
-    if (ini == null || fim == null) return toast('Preencha o começo e o fim.');
-    if (fim <= ini) fim += 1440; // passou da meia-noite
-    const i = tsOf(t.data, ini);
-    const f = tsOf(t.data, fim);
-    const sessoes = [...(t.sessoes || []), { i, f, manual: true }];
-    const tempoGasto = Math.round((t.tempoGasto || 0) + (f - i) / 1000);
-    t.sessoes = sessoes;
-    t.tempoGasto = tempoGasto;
+    const modo = form.dataset.modo;
+    const el = form.elements;
+    const obs = el.obs.value.trim();
+    const temSess = (t.sessoes || []).some((x) => x.i);
+    const refazer = !!form.dataset.mexeu || !temSess;
+    let i = null;
+    let g = null;
+    if (refazer) {
+      const ini = U.toMin(el.ini.value);
+      g = finGasto(el);
+      if (ini == null || g == null || el.fim.value === '') return toast('Preencha o início e o término.');
+      if (g <= 0) return toast('O tempo gasto precisa ser maior que zero.'), el.gh.focus();
+      i = tsOf(t.data, (Number(form.dataset.off) || 0) * 1440 + ini);
+    }
+    const ops = [];
+    if (isRunning(t)) stopTimer(t, ops);
+    const extra = {};
+    if (refazer) {
+      // As horas ditas aqui passam a ser o registro do que foi feito.
+      const antes = (t.sessoes || []).map((x) => x.obs).filter(Boolean).join(' · ');
+      const nota = obs || antes;
+      t.sessoes = [{ i, f: i + g * 60_000, ...(nota ? { obs: nota } : {}), manual: true }];
+      t.tempoGasto = g * 60;
+      Object.assign(extra, { sessoes: t.sessoes, tempoGasto: t.tempoGasto, cronometroInicio: null });
+    } else {
+      const last = t.sessoes[t.sessoes.length - 1];
+      if (obs !== (last.obs || '')) {
+        if (obs) last.obs = obs;
+        else delete last.obs;
+      }
+      extra.sessoes = t.sessoes;
+    }
+    // A tarefa passa a ficar no horário em que foi feita (na agenda e no calendário).
+    const sp = spanOf(t);
+    if (sp && sp.s >= 0 && sp.s < 1440) {
+      Object.assign(extra, { horario: U.fromMin(sp.s), duracao: Math.max(1, sp.e - sp.s), fimAberto: false });
+      if (t.origem === 'fixa') extra.ajustado = true;
+    }
     closeModal();
-    // Tarefa com horário: passa a ficar no horário em que foi feita.
-    const extra = { sessoes, tempoGasto };
-    if (t.horario) Object.assign(extra, { horario: U.fromMin(ini), duracao: fim - ini, fimAberto: false });
-    setDone(t, true, extra);
+    if (modo === 'ajustar') {
+      Object.assign(t, extra);
+      ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: extra });
+      render();
+      persist(db.batch(ops));
+      return toast(`Horário ajustado: ${spanTxt(spanOf(t))} · ${U.fmtDur(elapsed(t))}.`);
+    }
+    setDone(t, true, extra, ops);
+    toast(`Concluída: ${spanTxt(spanOf(t))} · ${U.fmtDur(elapsed(t))}.`);
   },
 
   'start-novo'(form) {
@@ -3483,6 +3671,15 @@ const FORMS = {
       if (t) {
         mudouHora = t.horario !== patch.horario || (t.duracao || null) !== patch.duracao || newDate !== oldDate;
         if (mudouHora && t.origem === 'fixa') patch.ajustado = true;
+        // Tarefa já feita: mudar o horário, o fim ou o tempo gasto muda também o registro (agenda, calendário e relatórios).
+        const mexeuTempo = patch.tempoGasto != null;
+        if (t.concluido && !isRunning(t) && patch.horario && (mudouHora || mexeuTempo)) {
+          const mudouPlano = t.horario !== patch.horario || (t.duracao || null) !== patch.duracao;
+          const g = Math.max(1, mexeuTempo ? Math.round(patch.tempoGasto / 60) : mudouPlano && patch.duracao ? patch.duracao : Math.round(elapsed(t) / 60));
+          const i = tsOf(newDate, U.toMin(patch.horario));
+          const nota = (t.sessoes || []).map((x) => x.obs).filter(Boolean).join(' · ');
+          Object.assign(patch, { sessoes: [{ i, f: i + g * 60_000, ...(nota ? { obs: nota } : {}), manual: true }], tempoGasto: g * 60, duracao: g, fimAberto: false });
+        }
         Object.assign(t, patch);
         if (newDate !== oldDate) {
           S.days[oldDate] = S.days[oldDate].filter((x) => x !== t);
@@ -3739,15 +3936,28 @@ const ACTIONS = {
   toggle: ({ id, date }) => {
     const t = findTask(id, date);
     if (!t) return;
+    if (t.concluido) return setDone(t, false);
     // 1º: Trabalho sem cliente/serviço ou curso sem qual → pergunta (obrigatório) e depois segue daqui.
-    if (!t.concluido && identFalta(t)) return openIdent(t, () => ACTIONS.toggle({ id, date }));
-    // 2º: sem tempo registrado, pergunta começou/terminou (com horário: o planejado; Trabalho e cursos sem horário também).
+    if (identFalta(t)) return openIdent(t, () => ACTIONS.toggle({ id, date }));
+    // 2º: Início, Tempo gasto e Término (já preenchidos). Só não pergunta em tarefa simples sem horário e sem tempo.
     const pedeTempo = !!t.horario || isWork(t.categoriaId) || itensOf(catById(t.categoriaId)).length > 0;
-    if (!t.concluido && !isRunning(t) && elapsed(t) < 60 && pedeTempo) return openCheckTime(t);
-    // Concluiu com o cronômetro rodando: pergunta a hora em que terminou (em branco = agora).
-    const rodando = !t.concluido && isRunning(t) && !(modal.open && modal.dataset.detail === id);
-    setDone(t, !t.concluido);
-    if (rodando) openObsPrompt(t, { concluiu: true });
+    if (isRunning(t) || elapsed(t) >= 60 || t.sessoes?.length || pedeTempo) return openFinish(t);
+    setDone(t, true);
+  },
+  parar: ({ id, date }) => {
+    const t = findTask(id, date) || runningTasks()[0];
+    if (!t) return render();
+    if (identFalta(t)) return openIdent(t, (x) => openFinish(x, { modo: 'parar' }));
+    openFinish(t, { modo: 'parar' });
+  },
+  'so-pausar': ({ id, date }) => {
+    closeModal();
+    const t = findTask(id, date);
+    if (t && isRunning(t)) ACTIONS.timer({ id, date });
+  },
+  'ajustar-hora': ({ id, date }) => {
+    const t = findTask(id, date);
+    if (t) openFinish(t, { modo: 'ajustar' });
   },
   'nao-feito': ({ id, date }) => {
     const t = findTask(id, date);
@@ -3774,8 +3984,8 @@ const ACTIONS = {
     const t = saveObs(el.closest('form'));
     if (t === false) return;
     closeModal();
-    if (t && identFalta(t)) return openIdent(t, (x) => setDone(x, true));
-    if (t) setDone(t, true);
+    if (t && identFalta(t)) return openIdent(t, (x) => openFinish(x));
+    if (t) openFinish(t);
   },
   'start-pick': ({ cli, cat, item, bloco }) => openStart({ cli, cat, item, bloco }),
   'comecei-hora': ({ hora }) => {
@@ -4138,6 +4348,8 @@ document.addEventListener('input', (e) => {
   if (el.matches('[data-comecei]')) {
     const b = el.form.querySelector('[data-comecei-btn] span');
     if (b) b.textContent = el.value ? 'Iniciar' : 'Comecei agora';
+  } else if (el.matches('[data-fin]')) {
+    finSync(el.form, el.dataset.fin);
   } else if (el.matches('[data-horario]')) {
     const form = el.form;
     const group = form.querySelector('[data-aviso-group]');

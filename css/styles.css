@@ -4822,3 +4822,60 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
   .block.short.running .block-time { display: none; }
   .block.short .block-title { min-width: 0; }
 }
+
+/* v32: botão Parar (cronômetro rodando, de qualquer dia) */
+.btn.parar { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.parar:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
+.icon-btn.stop-btn { color: var(--danger); }
+.detail-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+/* v32: Concluir com Início, Tempo gasto e Término */
+.fin3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
+.fin3 .field { min-width: 0; }
+.fin3 input[type='time'] { width: 100%; min-width: 0; }
+.dur-in { display: flex; align-items: center; gap: 4px; }
+.dur-in input { width: 0; flex: 1 1 0; min-width: 0; text-align: center; padding-left: 4px; padding-right: 4px; }
+.dur-in b { font-size: 12px; font-weight: 600; color: var(--muted); }
+.fin-dica { min-height: 1em; margin: 2px 0 10px; }
+.fin-dica:empty { display: none; }
+.finish .dot { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: var(--c); margin-right: 6px; }
+@media (max-width: 480px) {
+  .fin3 { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .fin3 .field { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 10px; }
+}
+
+/* v32: Resumo do dia (ao lado da agenda) */
+.rs-tot { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rs-tot span { display: inline-flex; align-items: center; gap: 4px; }
+.rs-tot .i { width: 13px; height: 13px; }
+.rs-tot .ok { color: #16a34a; }
+.rs-tot .nf { color: var(--danger); }
+.rs-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; }
+.rs { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 10px; }
+.rs:hover { background: var(--surface-2); }
+.rs.running { background: var(--accent-soft); }
+.rs.done .check { background: var(--c); border-color: var(--c); color: #fff; }
+.rs.nf .check { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); }
+.rs-main { flex: 1; min-width: 0; display: grid; gap: 2px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.rs-title { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+.rs.done .rs-title { color: var(--faint); text-decoration: line-through; }
+.rs.nf .rs-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--danger); }
+.rs-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rs-st { font-weight: 650; }
+.rs.done .rs-st { color: #16a34a; }
+.rs.nf .rs-st { color: var(--danger); }
+.rs.running .rs-st { color: var(--accent); }
+.rs-time { flex: none; font-size: 12.5px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.rs-time.none { color: var(--faint); font-weight: 500; }
+.rs-time.on { color: var(--accent); }
+.day-panel .rs-tot { margin-top: -4px; }
+@media (min-width: 1081px) {
+  .resumo .rs-list { max-height: calc(100vh - 220px); overflow-y: auto; }
+}
+
+/* v32: calendário — verde o que fez, vermelho o que marcou com X */
+.cal-meter { display: flex; }
+.cal-meter i { position: static; height: 100%; border-radius: 0; flex: none; }
+.cal-meter i.ok,
+.cal-cell.full .cal-meter i.ok { background: #22c55e; }
+.cal-meter i.nf { background: var(--danger); }
