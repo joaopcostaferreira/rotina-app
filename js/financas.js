@@ -919,7 +919,7 @@ export function createFin(ctx) {
         <div><span class="muted sm">${ts.length} ${rec ? 'entrada' : 'saída'}${ts.length === 1 ? '' : 's'}</span>
         <strong class="${rec ? 'pos' : 'neg'}">${brl(tot)}</strong>
         ${Math.abs(tot - real) > 0.004 ? `<small class="muted">${rec ? 'recebido' : 'pago'} ${brl(real)} · previsto ${brl(tot - real)}</small>` : ''}</div>
-        ${limpo ? '' : `<button type="button" class="btn ghost sm" data-action="fin-limpa" data-kind="${kind}">${icon('x')}Limpar filtros</button>`}
+        ${limpo ? '' : `<div class="btn-row">${ts.length ? `<button type="button" class="btn ghost sm" data-action="fin-mover" data-kind="${kind}">${icon('categorias')}Mudar descrição</button>` : ''}<button type="button" class="btn ghost sm" data-action="fin-limpa" data-kind="${kind}">${icon('x')}Limpar filtros</button></div>`}
       </div>
       ${ts.length ? `<ul class="tx-list card">${blocos.join('')}</ul>${n < ts.length ? `<p class="muted sm">Mostrando ${n} de ${ts.length}. Use os filtros para achar o resto.</p>` : ''}` : `<p class="muted fin-nada">Nada encontrado.</p>`}`;
   }
@@ -1513,9 +1513,62 @@ export function createFin(ctx) {
       ${modalHead(editing ? 'Editar descrição' : 'Nova descrição')}
       <label class="field"><span>Nome</span><input name="nome" required maxlength="60" autocomplete="off" value="${esc(c.nome || '')}" placeholder="Ex.: Mercado" autofocus></label>
       <label class="field"><span>Tipo</span><select name="grupo">${GRUPOS.map(([g, l]) => opt(g, l, c.grupo || 'variavel')).join('')}</select></label>
+      ${editing ? juntarCampo(c) : ''}
       ${modalFoot(editing ? 'fin-del' : '', c.id)}
     </form>`);
     if (editing) modalDel('cats');
+  }
+
+  // Quantos lançamentos e gastos estimados usam esta descrição.
+  const usoCat = (id) => ({ tx: F().tx.filter((t) => t.catId === id), estim: F().estim.filter((e) => e.catId === id) });
+  function juntarCampo(c) {
+    const u = usoCat(c.id);
+    const outras = F().cats.filter((x) => x.id !== c.id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    if (!outras.length) return '';
+    return `<label class="field"><span>Juntar com outra descrição <em>opcional</em></span><select name="junta">
+        <option value="">Não juntar</option>${outras.map((x) => opt(x.id, x.nome, '')).join('')}</select></label>
+      <p class="hint">${u.tx.length} lançamento${u.tx.length === 1 ? '' : 's'}${u.estim.length ? ` e ${u.estim.length} gasto${u.estim.length === 1 ? '' : 's'} estimado${u.estim.length === 1 ? '' : 's'}` : ''} usa${u.tx.length + u.estim.length === 1 ? '' : 'm'} esta descrição. Ao juntar, tudo passa para a escolhida (histórico incluído) e esta é apagada.</p>`;
+  }
+
+  // Passa lançamentos (e gastos estimados) para outra descrição.
+  function moverCat(txs, estims, para) {
+    const ops = [];
+    for (const t of txs) if (t.catId !== para) (t.catId = para), ops.push({ type: 'update', col: COLS.tx, id: t.id, data: { catId: para } });
+    for (const e of estims) if (e.catId !== para) (e.catId = para), ops.push({ type: 'update', col: COLS.estim, id: e.id, data: { catId: para } });
+    return ops;
+  }
+
+  async function juntarCat(id, para) {
+    const de = achar('cats', id);
+    const alvo = achar('cats', para);
+    if (!de || !alvo) return;
+    const u = usoCat(id);
+    if (!(await ask(`Passar ${u.tx.length + u.estim.length} item(ns) de “${de.nome}” para “${alvo.nome}” e apagar “${de.nome}”?`, 'Juntar', false))) return openCat(de);
+    const ops = moverCat(u.tx, u.estim, para);
+    ops.push({ type: 'delete', col: COLS.cats, id });
+    F().cats = F().cats.filter((x) => x !== de);
+    persist(db.batch(ops));
+    closeModal();
+    toast(`“${de.nome}” foi juntada em “${alvo.nome}”.`);
+    render();
+  }
+
+  // Mudar a descrição de tudo o que está filtrado em Receitas ou Despesas.
+  function openMover(kind) {
+    const ts = filtrados(kind);
+    if (!ts.length) return toast('Nada filtrado.');
+    const rec = kind === 'receitas';
+    const cats = F().cats.slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const mesmas = new Set(ts.map((t) => t.catId || ''));
+    const atual = mesmas.size === 1 ? [...mesmas][0] : '';
+    openModal(`<form class="modal-body fin-form" data-form="fin-mover" data-kind="${kind}">
+      ${modalHead('Mudar descrição')}
+      <p class="muted sm">${ts.length} ${rec ? 'entrada' : 'saída'}${ts.length === 1 ? '' : 's'} filtrada${ts.length === 1 ? '' : 's'} · ${brl(soma(ts))}</p>
+      <label class="field"><span>Nova descrição</span><select name="catId" required>
+        <option value="" disabled ${atual ? '' : 'selected'}>Escolha…</option>${cats.map((c) => opt(c.id, c.nome, atual)).join('')}</select></label>
+      <p class="hint">Vale para todos os lançamentos da lista, de todos os meses do filtro.</p>
+      ${modalFoot()}
+    </form>`);
   }
 
   function openEstim(e) {
@@ -1899,6 +1952,7 @@ export function createFin(ctx) {
       render();
       scrollTo(0, 0);
     },
+    'fin-mover': ({ kind }) => openMover(kind),
     'fin-limpa': ({ kind }) => {
       S.finF[kind] = filtro0();
       render();
@@ -2040,6 +2094,7 @@ export function createFin(ctx) {
       }
       if (k === 'cartoes' && F().tx.some((t) => t.cartaoId === id)) return toast('Este cartão tem lançamentos e não pode ser excluído.');
       const nome = doc.nome || doc.motivo || 'este item';
+      if (k === 'cats' && usoCat(id).tx.length && !(await ask(`“${nome}” tem ${usoCat(id).tx.length} lançamento(s), que ficarão sem descrição. Para passar tudo para outra, use “Juntar com outra descrição”.`, 'Excluir mesmo'))) return openCat(doc);
       if (k === 'emp' && recebido(doc) && !(await ask(`“${doc.nome}” já tem ${brl(recebido(doc))} abatido. Excluir apaga também esses recebimentos.`, 'Continuar'))) return openEmp(doc);
       if (!(await ask(`Excluir “${nome}”?`))) return openAgain(k, doc);
       F()[k] = F()[k].filter((x) => x !== doc);
@@ -2062,7 +2117,19 @@ export function createFin(ctx) {
     'fin-cat'(form) {
       const f = Object.fromEntries(new FormData(form));
       if (!f.nome.trim()) return;
+      if (form.dataset.id && f.junta) return juntarCat(form.dataset.id, f.junta);
       salvaDoc('cats', form.dataset.id, { nome: f.nome.trim(), grupo: f.grupo || 'variavel' });
+    },
+    async 'fin-mover'(form) {
+      const para = form.elements.catId.value;
+      const alvo = achar('cats', para);
+      if (!alvo) return toast('Escolha a descrição.');
+      const ts = filtrados(form.dataset.kind);
+      const ops = moverCat(ts, [], para);
+      if (ops.length) persist(db.batch(ops));
+      closeModal();
+      toast(ops.length ? `${ops.length} lançamento${ops.length === 1 ? '' : 's'} agora em “${alvo.nome}”.` : `Já estava tudo em “${alvo.nome}”.`);
+      render();
     },
     'fin-estim'(form) {
       const f = Object.fromEntries(new FormData(form));
