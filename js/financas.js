@@ -48,7 +48,7 @@ export function createFin(ctx) {
   S.finDia = null;
   S.finHoraPer = 'mes';
   S.finExt = { tipo: '', fonte: 'c', onde: '', n: 60 }; // Extrato: filtros (contas ou cartões, qual) e quantos itens mostrar
-  const filtro0 = () => ({ per: 'mes', de: '', ate: '', cli: '', cat: '', onde: '', conta: '', q: '' });
+  const filtro0 = () => ({ per: 'mes', de: '', ate: '', cli: '', cat: '', onde: '', conta: '', q: '', multi: false, sel: {} });
   S.finF = { receitas: filtro0(), despesas: filtro0(), transf: filtro0() };
   let carregando = null;
 
@@ -785,7 +785,7 @@ export function createFin(ctx) {
         if (!t.data) return false;
         if (f.per === 'mes' && !t.data.startsWith(S.finMes)) return false;
         if (f.per === 'intervalo' && ((f.de && t.data < f.de) || (f.ate && t.data > f.ate))) return false;
-        if (f.conta && t.deId !== f.conta && t.paraId !== f.conta) return false;
+        if (!passa(f, 'conta', t.deId, t.paraId)) return false;
         if (q && !norm(`${t.nome} ${t.obs || ''} ${contaById(t.deId)?.nome || ''} ${contaById(t.paraId)?.nome || ''}`).includes(q)) return false;
         return true;
       })
@@ -795,7 +795,7 @@ export function createFin(ctx) {
   function transfLista() {
     const ts = transfFiltradas();
     const f = S.finF.transf;
-    const limpo = !f.q && !f.conta && f.per === 'mes';
+    const limpo = !f.q && !filtroAtivo(f, 'conta') && f.per === 'mes';
     const linhas = [];
     let dia = '';
     for (const t of ts.slice(0, 300)) {
@@ -824,8 +824,9 @@ export function createFin(ctx) {
     const f = S.finF.transf;
     const opt = (v, l, sel) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(l)}</option>`;
     return `<section class="card fin-filtros" data-fin-kind="transf">
-      <div class="fin-f-row">
+      <div class="fin-f-row fin-f-top">
         <label class="field fin-busca">${icon('busca')}<input type="search" placeholder="Buscar nome ou conta" value="${esc(f.q)}" data-fin-f="q" autocomplete="off"></label>
+        ${multiBtn('transf')}
       </div>
       <div class="fin-f-row fin-transf-f">
         <label class="field"><span>Período</span><select data-fin-f="per">
@@ -836,11 +837,105 @@ export function createFin(ctx) {
                <label class="field"><span>Até</span><input type="date" value="${f.ate}" data-fin-f="ate"></label>`
             : ''
         }
-        <label class="field"><span>Conta</span><select data-fin-f="conta">${opt('', 'Todas', f.conta)}${F().contas.map((c) => opt(c.id, c.nome, f.conta)).join('')}</select></label>
+        ${campoFiltro('transf', 'conta')}
         <button type="button" class="btn primary sm" data-action="fin-new-transf">${icon('plus')}Transferir</button>
       </div>
     </section>
     <div data-fin-lista>${transfLista()}</div>`;
+  }
+
+  // ---------- Filtro com caixinhas ("Marcar vários") ----------
+  // Ligado, cada filtro (descrição, cliente, conta ou cartão) vira uma lista de caixinhas.
+  // sel[campo] = null quer dizer tudo marcado (sem filtro).
+  const CAMPOS = { receitas: ['cat', 'cli'], despesas: ['cat', 'onde'], transf: ['conta'] };
+  const ROTULO = { cat: ['Descrição', 'Todas'], cli: ['Cliente', 'Todos'], onde: ['Conta ou cartão', 'Todos'], conta: ['Conta', 'Todas'] };
+  function opcoesFiltro(kind, campo) {
+    const rec = kind === 'receitas';
+    if (campo === 'cat') {
+      const usadas = new Set(F().tx.filter((t) => t.tipo === (rec ? 'entrada' : 'saida')).map((t) => t.catId));
+      return [['-', 'Sem descrição'], ...F().cats.filter((c) => usadas.has(c.id) || (rec ? c.grupo === 'entrada' : c.grupo !== 'entrada')).map((c) => [c.id, c.nome])];
+    }
+    if (campo === 'cli') {
+      const clis = [...new Set(F().tx.filter((t) => t.tipo === 'entrada' && t.clienteId).map((t) => t.clienteId))]
+        .map(cliById)
+        .filter(Boolean)
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+      return [['-', 'Sem cliente'], ...clis.map((c) => [c.id, c.nome])];
+    }
+    if (campo === 'onde') return [...F().contas.map((c) => [`c:${c.id}`, c.nome]), ...F().cartoes.map((k) => [`k:${k.id}`, k.nome])];
+    return F().contas.map((c) => [c.id, c.nome]);
+  }
+  const chaveTx = {
+    cat: (t) => (t.catId && catFin(t.catId) ? t.catId : '-'),
+    cli: (t) => t.clienteId || '-',
+    onde: (t) => (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`),
+  };
+  const filtroAtivo = (f, campo) => (f.multi ? Array.isArray(f.sel?.[campo]) : !!f[campo]);
+  function passa(f, campo, ...vals) {
+    if (f.multi) {
+      const s = f.sel?.[campo];
+      return !s || vals.some((v) => s.includes(v));
+    }
+    return !f[campo] || vals.includes(f[campo]);
+  }
+  const multiBtn = (kind) => {
+    const on = !!S.finF[kind].multi;
+    return `<button type="button" class="btn ghost sm fin-multi-btn${on ? ' on' : ''}" data-action="fin-multi" data-kind="${kind}" aria-pressed="${on}" title="Filtrar por mais de um">${icon('check')}<span>Marcar vários</span></button>`;
+  };
+  function resumoMs(ops, s, todos) {
+    if (!s) return todos;
+    if (!s.length) return 'Nenhum';
+    if (s.length === 1) return esc(ops.find((o) => o[0] === s[0])?.[1] || '1 marcado');
+    return `${s.length} de ${ops.length}`;
+  }
+  function campoFiltro(kind, campo) {
+    const f = S.finF[kind];
+    const [rot, todos] = ROTULO[campo];
+    const ops = opcoesFiltro(kind, campo);
+    if (!f.multi) {
+      const o = (v, l) => `<option value="${esc(v)}" ${v === f[campo] ? 'selected' : ''}>${esc(l)}</option>`;
+      return `<label class="field"><span>${rot}</span><select data-fin-f="${campo}">${o('', todos)}${ops.map(([v, l]) => o(v, l)).join('')}</select></label>`;
+    }
+    const s = f.sel?.[campo];
+    const bt = (on, txt) => `<button type="button" class="btn ghost sm" data-action="fin-ms-todos" data-kind="${kind}" data-campo="${campo}" data-on="${on}">${txt}</button>`;
+    return `<div class="field fin-ms-field"><span>${rot}</span><details class="fin-ms" data-fin-ms="${campo}">
+        <summary>${resumoMs(ops, s, todos)}</summary>
+        <div class="fin-ms-pop">
+          <div class="fin-ms-acts">${bt(1, 'Marcar todos')}${bt(0, 'Desmarcar todos')}</div>
+          ${ops.map(([v, l]) => `<label class="fin-ms-op"><input type="checkbox" data-fin-m="${campo}" value="${esc(v)}" ${!s || s.includes(v) ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('')}
+        </div>
+      </details></div>`;
+  }
+  // Liga/desliga: tudo que estava em "Todas" vem marcado; um só escolhido vem só ele marcado.
+  function trocaMulti(kind) {
+    const f = S.finF[kind];
+    if (!f.multi) {
+      f.sel = {};
+      for (const c of CAMPOS[kind]) f.sel[c] = f[c] ? [f[c]] : null;
+      f.multi = true;
+    } else {
+      for (const c of CAMPOS[kind]) {
+        const sel = f.sel?.[c];
+        f[c] = sel && sel.length === 1 ? sel[0] : '';
+      }
+      f.multi = false;
+      f.sel = {};
+    }
+    render();
+  }
+  function atualizaLista(kind) {
+    const lista = document.querySelector('[data-fin-lista]');
+    if (lista) lista.innerHTML = kind === 'transf' ? transfLista() : listaHTML(kind);
+  }
+  function marcaMs(kind, campo) {
+    const f = S.finF[kind];
+    const box = document.querySelector(`[data-fin-kind="${kind}"] [data-fin-ms="${campo}"]`);
+    if (!f || !box) return;
+    const cks = [...box.querySelectorAll('[data-fin-m]')];
+    const on = cks.filter((c) => c.checked).map((c) => c.value);
+    f.sel = { ...f.sel, [campo]: on.length === cks.length ? null : on };
+    box.querySelector('summary').innerHTML = resumoMs(opcoesFiltro(kind, campo), f.sel[campo], ROTULO[campo][1]);
+    atualizaLista(kind);
   }
 
   // ---------- Receitas e despesas ----------
@@ -854,9 +949,9 @@ export function createFin(ctx) {
         if (t.tipo !== tipo) return false;
         if (f.per === 'mes' && !t.data.startsWith(S.finMes)) return false;
         if (f.per === 'intervalo' && ((f.de && t.data < f.de) || (f.ate && t.data > f.ate))) return false;
-        if (f.cli && (f.cli === '-' ? t.clienteId : t.clienteId !== f.cli)) return false;
-        if (f.cat && (f.cat === '-' ? t.catId : t.catId !== f.cat)) return false;
-        if (f.onde && f.onde !== (t.cartaoId ? `k:${t.cartaoId}` : `c:${t.contaId}`)) return false;
+        if (tipo === 'entrada' && !passa(f, 'cli', chaveTx.cli(t))) return false;
+        if (!passa(f, 'cat', chaveTx.cat(t))) return false;
+        if (tipo === 'saida' && !passa(f, 'onde', chaveTx.onde(t))) return false;
         if (q && !norm(`${t.nome} ${t.obs || ''} ${catFin(t.catId)?.nome || ''} ${cliNome(t.clienteId)}`).includes(q)) return false;
         return true;
       })
@@ -866,16 +961,11 @@ export function createFin(ctx) {
   function listaPage(kind) {
     const f = S.finF[kind];
     const rec = kind === 'receitas';
-    const usadas = new Set(F().tx.filter((t) => t.tipo === (rec ? 'entrada' : 'saida')).map((t) => t.catId));
-    const cats = F().cats.filter((c) => usadas.has(c.id) || (rec ? c.grupo === 'entrada' : c.grupo !== 'entrada'));
     const opt = (v, l, sel) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${esc(l)}</option>`;
-    const clis = [...new Set(F().tx.filter((t) => t.tipo === 'entrada' && t.clienteId).map((t) => t.clienteId))]
-      .map(cliById)
-      .filter(Boolean)
-      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
     return `<section class="card fin-filtros" data-fin-kind="${kind}">
-      <div class="fin-f-row">
+      <div class="fin-f-row fin-f-top">
         <label class="field fin-busca">${icon('busca')}<input type="search" placeholder="${rec ? 'Buscar nome, descrição, cliente' : 'Buscar nome ou descrição'}" value="${esc(f.q)}" data-fin-f="q" autocomplete="off"></label>
+        ${multiBtn(kind)}
       </div>
       <div class="fin-f-row">
         <label class="field"><span>Período</span><select data-fin-f="per">
@@ -886,12 +976,8 @@ export function createFin(ctx) {
                <label class="field"><span>Até</span><input type="date" value="${f.ate}" data-fin-f="ate"></label>`
             : ''
         }
-        <label class="field"><span>Descrição</span><select data-fin-f="cat">${opt('', 'Todas', f.cat)}${opt('-', 'Sem descrição', f.cat)}${cats.map((c) => opt(c.id, c.nome, f.cat)).join('')}</select></label>
-        ${
-          rec
-            ? `<label class="field"><span>Cliente</span><select data-fin-f="cli">${opt('', 'Todos', f.cli)}${opt('-', 'Sem cliente', f.cli)}${clis.map((c) => opt(c.id, c.nome, f.cli)).join('')}</select></label>`
-            : `<label class="field"><span>Conta ou cartão</span><select data-fin-f="onde">${opt('', 'Todos', f.onde)}${F().contas.map((c) => opt(`c:${c.id}`, c.nome, f.onde)).join('')}${F().cartoes.map((k) => opt(`k:${k.id}`, k.nome, f.onde)).join('')}</select></label>`
-        }
+        ${campoFiltro(kind, 'cat')}
+        ${campoFiltro(kind, rec ? 'cli' : 'onde')}
       </div>
     </section>
     <div data-fin-lista>${listaHTML(kind)}</div>`;
@@ -903,7 +989,7 @@ export function createFin(ctx) {
     const real = soma(ts.filter((t) => t.realizado));
     const tot = soma(ts);
     const f = S.finF[kind];
-    const limpo = !f.q && !f.cat && !f.cli && !f.onde && f.per === 'mes';
+    const limpo = !f.q && !filtroAtivo(f, 'cat') && !filtroAtivo(f, 'cli') && !filtroAtivo(f, 'onde') && f.per === 'mes';
     // Agrupado por dia, como uma lista do Notion.
     const grupos = new Map();
     for (const t of ts) grupos.set(t.data, [...(grupos.get(t.data) || []), t]);
@@ -1945,7 +2031,7 @@ export function createFin(ctx) {
     'fin-hora-cli': ({ cli }) => {
       const n = PER_HORA.find((p) => p[0] === S.finHoraPer)?.[2] || 1;
       S.finF.receitas = {
-        ...S.finF.receitas, cli, q: '', cat: '',
+        ...S.finF.receitas, cli, q: '', cat: '', multi: false, sel: {},
         ...(n === 1 ? { per: 'mes' } : { per: 'intervalo', de: `${U.addMonths(S.finMes, 1 - n)}-01`, ate: fimDoMes(S.finMes) }),
       };
       S.finTab = 'receitas';
@@ -1953,6 +2039,11 @@ export function createFin(ctx) {
       scrollTo(0, 0);
     },
     'fin-mover': ({ kind }) => openMover(kind),
+    'fin-multi': ({ kind }) => trocaMulti(kind),
+    'fin-ms-todos': ({ kind, campo, on }, el) => {
+      el.closest('[data-fin-ms]').querySelectorAll('[data-fin-m]').forEach((c) => (c.checked = on === '1'));
+      marcaMs(kind, campo);
+    },
     'fin-limpa': ({ kind }) => {
       S.finF[kind] = filtro0();
       render();
@@ -2153,15 +2244,13 @@ export function createFin(ctx) {
     S.finF[kind][el.dataset.finF] = el.value;
     if (el.dataset.finF === 'per') return render(), true;
     clearTimeout(filtroTimer);
-    filtroTimer = setTimeout(() => {
-      const lista = document.querySelector('[data-fin-lista]');
-      if (lista) lista.innerHTML = kind === 'transf' ? transfLista() : listaHTML(kind);
-    }, el.type === 'search' ? 200 : 0);
+    filtroTimer = setTimeout(() => atualizaLista(kind), el.type === 'search' ? 200 : 0);
     return true;
   }
 
   function onChange(el) {
     if (el.matches('[data-fin-f]')) return el.type !== 'search' && onFiltro(el);
+    if (el.matches('[data-fin-m]')) return marcaMs(el.closest('[data-fin-kind]')?.dataset.finKind, el.dataset.finM), true;
     if (el.matches('[data-fin-tipo], [data-fin-onde], [data-fin-parcelas], [data-fin-assin]')) {
       syncTxForm(el.form);
       return true;

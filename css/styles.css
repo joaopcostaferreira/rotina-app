@@ -4879,3 +4879,59 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .cal-meter i.ok,
 .cal-cell.full .cal-meter i.ok { background: #22c55e; }
 .cal-meter i.nf { background: var(--danger); }
+
+/* v34: filtro com caixinhas ("Marcar vários") */
+.fin-f-top { flex-wrap: nowrap; align-items: center; }
+.fin-f-top .fin-busca { flex: 1 1 auto !important; min-width: 0; }
+.fin-multi-btn { flex: 0 0 auto; min-height: 44px; white-space: nowrap; }
+.fin-multi-btn .i { opacity: 0.45; }
+.fin-multi-btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.fin-multi-btn.on .i { opacity: 1; }
+.fin-ms { min-width: 0; }
+.fin-filtros .fin-f-row:not(.fin-transf-f) { align-items: flex-start; }
+.fin-ms-field:has(.fin-ms[open]) { flex-basis: 100%; }
+.fin-ms summary {
+  list-style: none;
+  cursor: pointer;
+  position: relative;
+  min-height: 44px;
+  padding: 10px 34px 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fin-ms summary::-webkit-details-marker { display: none; }
+.fin-ms summary::after {
+  content: '';
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-70%) rotate(45deg);
+}
+.fin-ms[open] summary { border-color: var(--accent); }
+.fin-ms[open] summary::after { transform: translateY(-30%) rotate(225deg); }
+.fin-ms-pop {
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  max-height: 300px;
+  overflow-y: auto;
+}
+.fin-ms-acts { display: flex; gap: 6px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.fin-ms-acts { flex-wrap: wrap; }
+.fin-ms-acts .btn { flex: 1 1 120px; min-width: 0; justify-content: center; }
+.fin-ms-op { display: flex; align-items: center; gap: 10px; padding: 9px 6px; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.fin-ms-op:hover { background: var(--surface-2); }
+.fin-ms-op input { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+@media (max-width: 360px) { .fin-multi-btn span { display: none; } }
+.fin-busca input[type='search'] { padding-left: 38px !important; }
