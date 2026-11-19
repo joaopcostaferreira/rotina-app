@@ -1858,7 +1858,8 @@ function askComecei(p) {
   const voltar = t ? '' : c ? `data-cli="${c.id}"` : `data-cat="${p.catId || ''}" data-item="${p.itemId || ''}"`;
   const agora = U.fromMin(U.nowMin());
   // Tarefa marcada para um horário que já passou: um toque coloca esse horário.
-  const marcado = t?.horario && t.data === U.todayStr() && U.toMin(t.horario) < U.nowMin() ? t.horario : '';
+  const tb = t || (p.bloco ? findTask(p.bloco, U.todayStr()) : null);
+  const marcado = tb?.horario && tb.data === U.todayStr() && U.toMin(tb.horario) < U.nowMin() ? tb.horario : '';
   openModal(`<form class="modal-body start comecei" data-form="comecei" data-p="${esc(JSON.stringify(p))}">
     <header class="modal-head">
       ${t ? '' : `<button type="button" class="icon-btn" data-action="start-pick" ${voltar} data-bloco="${p.bloco || ''}" aria-label="Voltar">${icon('left')}</button>`}
@@ -3297,13 +3298,15 @@ const defaultCat = (preferWork) =>
   (preferWork && S.categories.find((c) => /trabalho/i.test(c.nome))?.id) || S.categories[0]?.id || '';
 
 function openDailyForm(t) {
-  // Tarefa já feita: o formulário mostra o horário em que ela foi feita, não o planejado.
-  const sp = t.id && t.concluido ? spanOf(t) : null;
-  if (sp?.real && sp.s >= 0 && sp.s < 1440) t = { ...t, horario: U.fromMin(sp.s), duracao: Math.max(1, sp.e - sp.s), fimAberto: false };
+  // Tarefa já feita ou com cronômetro: o formulário mostra o horário em que ela foi feita (ou começou), não o planejado.
+  // Aí mudar o Início não arrasta o fim junto: o fim continua sendo quando terminou.
+  const sp = t.id && (t.concluido || (t.sessoes || []).some((x) => x.i)) ? spanOf(t, true) : null;
+  const real = !!(sp?.real && sp.s >= 0 && sp.s < 1440);
+  if (real) t = { ...t, horario: U.fromMin(sp.s), duracao: Math.max(1, sp.e - sp.s), fimAberto: false };
   const editing = !!t.id;
   const fixa = editing && t.origem === 'fixa';
   const catId = t.categoriaId || (t.clienteId ? workCatId() : '') || defaultCat(false);
-  openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}" data-dur="${t.duracao || ''}">
+  openModal(`<form class="modal-body" data-form="daily" data-id="${t.id || ''}" data-old-date="${t.data}" data-dur="${t.duracao || ''}"${real ? ` data-real="1" data-ini0="${t.horario}" data-dur0="${t.duracao}"` : ''}>
     ${modalHead(editing ? 'Editar tarefa' : 'Nova tarefa')}
     ${fixa ? '<p class="note">Esta tarefa veio da rotina. Mudanças aqui valem só para este dia.</p>' : ''}
     <label class="field"><span data-titulo-lbl>${isWork(catId) ? 'Serviço' : 'Título'}</span>
@@ -3727,6 +3730,24 @@ const FORMS = {
       if (tempo && tempo.value !== '' && tempo.value !== tempo.dataset.orig) {
         patch.tempoGasto = Math.max(0, Math.round(Number(tempo.value) * 60));
         if (t && isRunning(t)) patch.cronometroInicio = Date.now();
+      }
+      // Horário real na tela e nada mudou nele: o planejado da tarefa fica como estava.
+      const real = form.dataset.real && t && !t.concluido;
+      const mexeuIni = real && patch.horario !== form.dataset.ini0;
+      if (real && !mexeuIni && String(patch.duracao) === form.dataset.dur0) Object.assign(patch, { horario: t.horario, duracao: t.duracao || null });
+      // Com cronômetro (rodando ou pausado): mudar o Início muda quando ele começou (ex.: "comecei 10h30").
+      if (mexeuIni && patch.horario && newDate === oldDate && patch.tempoGasto == null && (t.sessoes || []).some((x) => x.i)) {
+        const ss = (t.sessoes || []).filter((x) => x.i);
+        const first = ss.reduce((a, b) => (a.i <= b.i ? a : b));
+        const novo = tsOf(newDate, U.toMin(patch.horario));
+        const anterior = ss.filter((x) => x !== first && x.f && x.f <= first.i).reduce((m, x) => Math.max(m, x.f), 0);
+        if (novo < (first.f || Date.now()) && novo >= anterior) {
+          const dif = first.i - novo;
+          first.i = novo;
+          if (first.f) patch.tempoGasto = Math.max(0, Math.round((t.tempoGasto || 0) + dif / 1000));
+          else patch.cronometroInicio = novo; // sessão aberta: conta desde o novo começo
+          patch.sessoes = t.sessoes;
+        }
       }
       if (t) {
         mudouHora = t.horario !== patch.horario || (t.duracao || null) !== patch.duracao || newDate !== oldDate;
@@ -4417,7 +4438,7 @@ document.addEventListener('input', (e) => {
     // Mudou o começo: o fim anda junto, mantendo a duração que já estava.
     const fim = form.elements.fim;
     const dur = Number(form.dataset.dur) || (fim?.value ? null : S.profile.duracaoPadrao || 30);
-    if (fim && el.value && dur) fim.value = U.fromMin(U.toMin(el.value) + dur);
+    if (fim && el.value && dur && !form.dataset.real) fim.value = U.fromMin(U.toMin(el.value) + dur);
     atualizaDur(form);
   } else if (el.matches('[data-fim]')) {
     el.form.dataset.dur = durDoForm(el.form) || '';
