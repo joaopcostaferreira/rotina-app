@@ -4935,3 +4935,15 @@ button.fin-hora-row:hover .grow { text-decoration: underline; }
 .fin-ms-op input { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
 @media (max-width: 360px) { .fin-multi-btn span { display: none; } }
 .fin-busca input[type='search'] { padding-left: 38px !important; }
+
+/* v35: nome da tarefa "Categoria • o que é" */
+.t-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 6px 0.12em;
+  border-radius: 50%;
+  background: var(--c, currentColor);
+  vertical-align: middle;
+  flex: 0 0 auto;
+}

@@ -669,7 +669,9 @@ function startMinOf(t) {
 
 // Horário real de uma tarefa, em minutos desde a meia-noite do dia dela (passa de 1440 quando atravessa a meia-noite).
 // Com sessões: do começo da 1ª ao fim da última (rodando = agora). Sem sessões: o horário planejado.
-function spanOf(t) {
+// vis = para desenhar na tela: tarefa ainda não concluída cujo fim planejado vem depois do que já rodou
+// vai até o fim planejado (ex.: era até 10h30, mudou para 11h30 → o bloco cresce).
+function spanOf(t, vis = false) {
   const ss = (t.sessoes || []).filter((x) => x.i);
   if (ss.length) {
     const base = U.parseYmd(t.data).getTime();
@@ -677,7 +679,14 @@ function spanOf(t) {
     const i = Math.min(...ss.map((x) => x.i));
     const f = Math.max(...ss.map((x) => x.f || (run ? Date.now() : x.i)));
     const s = Math.floor((i - base) / 60_000);
-    return { s, e: Math.max(s + 1, Math.round((f - base) / 60_000)), real: true, aberto: run };
+    let e = Math.max(s + 1, Math.round((f - base) / 60_000));
+    let aberto = run;
+    if (vis && !t.concluido && t.horario && !t.fimAberto) {
+      const ps = U.toMin(t.horario);
+      const pe = ps + duracao(t);
+      if (ps <= e && pe > e) (e = pe), (aberto = false);
+    }
+    return { s, e, real: true, aberto };
   }
   if (!t.horario) return null;
   const s = U.toMin(t.horario);
@@ -706,6 +715,33 @@ function carryOver(date) {
 }
 const pararBtn = (t, cls = '') =>
   `<button type="button" class="btn primary parar ${cls}" data-action="parar" data-id="${t.id}" data-date="${t.data}" title="Parar: ${esc(t.titulo)}">${icon('stop')}<span>Parar</span></button>`;
+
+// Nome na tela: sempre a categoria na frente, uma bolinha e o que é.
+// Ex.: "Cursos • Aula de inglês", "Cursos • Fotografia", "Trabalho • Ronald - Edição de vídeo", "Religião • Igreja".
+function nomePartes(t) {
+  const cat = catById(t.categoriaId);
+  const cli = cliById(t.clienteId);
+  const tit = (t.titulo || '').trim();
+  const n = norm(tit);
+  const gen = !n || n === norm(cat?.nome || '') || n === 'trabalho';
+  let resto;
+  if (cli) {
+    const serv = (t.servico || (gen || n === norm(cli.nome) ? '' : tit)).trim();
+    resto = [cli.nome, serv && norm(serv) !== norm(cli.nome) ? serv : ''].filter(Boolean).join(' - ');
+    if (t.pessoa && !norm(resto).includes(norm(t.pessoa))) resto += ` · ${t.pessoa}`;
+  } else resto = gen ? itemOf(t)?.nome || '' : tit;
+  if (!cat) return { cat: '', resto: resto || tit };
+  return { cat: cat.nome, resto };
+}
+const nomeTxt = (t) => {
+  const { cat, resto } = nomePartes(t);
+  return [cat, resto].filter(Boolean).join(' • ') || t.titulo || '';
+};
+const nomeHTML = (t) => {
+  const { cat, resto } = nomePartes(t);
+  if (cat && resto) return `${esc(cat)}<i class="t-dot" aria-hidden="true"></i>${esc(resto)}`;
+  return esc(cat || resto || t.titulo || '');
+};
 
 // Subtítulo de uma tarefa: categoria · cliente/curso · pessoa.
 const taskSub = (t) => [catById(t.categoriaId)?.nome, cliById(t.clienteId)?.nome, itemOf(t)?.nome].filter(Boolean).join(' · ');
@@ -741,13 +777,10 @@ function taskRow(t, { showCat = false } = {}) {
   const late = isLate(t);
   const meta = [
     late ? `<span class="chip late">Atrasada</span>` : '',
-    spanOf(t) ? `<span class="chip">${icon('horarios')}${spanTxt(spanOf(t))}</span>` : '',
+    spanOf(t, true) ? `<span class="chip">${icon('horarios')}${spanTxt(spanOf(t, true))}</span>` : '',
     t.horario && avisoAtivo(t) && !fechada(t)
       ? `<span class="chip muted" title="Aviso ${avisoMin(t) ? `${avisoMin(t)} min antes` : 'na hora'}">${icon('sino')}${avisoMin(t) ? `${avisoMin(t)} min` : 'na hora'}</span>`
       : '',
-    showCat && cat ? `<span class="chip cat"><i class="dot"></i>${esc(cat.nome)}</span>` : '',
-    showCat && cli ? `<span class="chip">${icon('clientes')}${esc(cli.nome)}</span>` : '',
-    showCat && itemOf(t) ? `<span class="chip">${icon('diario')}${esc(itemOf(t).nome)}</span>` : '',
     t.origem === 'fixa' ? `<span class="chip muted" title="Vem da rotina">${icon('rotina')}Rotina</span>` : '',
     t.notas?.trim() ? `<span class="chip muted" title="Tem notas">${icon('nota')}Notas</span>` : '',
   ].join('');
@@ -755,7 +788,7 @@ function taskRow(t, { showCat = false } = {}) {
     <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
       data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
     <div class="task-main" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir notas e cronômetro">
-      <span class="task-title">${esc(t.titulo)}</span>
+      <span class="task-title">${nomeHTML(t)}</span>
       ${meta ? `<span class="task-meta">${meta}</span>` : ''}
     </div>
     ${S.pedirConclusao === t.id && !t.concluido ? `<button type="button" class="b-done" data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}<span>Finalizou?</span></button>` : ''}
@@ -817,8 +850,7 @@ function viewPainel() {
   const blockLine = (t) =>
     `<button type="button" class="now-item" style="--c:${colorOf(t)}" data-action="go" data-route="hoje" data-date="${today}">
       <span class="now-time">${t.horario}–${U.fromMin(U.toMin(t.horario) + duracao(t))}</span>
-      <span class="now-title${t.concluido ? ' done' : ''}">${esc(t.titulo)}</span>
-      <span class="now-sub">${esc([catById(t.categoriaId)?.nome, cliById(t.clienteId)?.nome].filter(Boolean).join(' · '))}</span>
+      <span class="now-title${t.concluido ? ' done' : ''}">${nomeHTML(t)}</span>
     </button>`;
 
   const catRows = S.categories
@@ -890,7 +922,7 @@ function viewPainel() {
         .map(
           (t) => `<div class="running-now" style="--c:${colorOf(t)}">
             <span class="running-icon">${icon('cronometro')}</span>
-            <div><span class="now-title">${esc(t.titulo)}</span><span class="now-sub">${esc(taskSub(t))}${taskSub(t) ? ' · ' : ''}desde ${hhmm(t.cronometroInicio)}${t.data !== today ? ` de ${esc(U.relativo(t.data).toLowerCase())}` : ''} · <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
+            <div><span class="now-title">${nomeHTML(t)}</span><span class="now-sub">desde ${hhmm(t.cronometroInicio)}${t.data !== today ? ` de ${esc(U.relativo(t.data).toLowerCase())}` : ''} · <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
             <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro" title="Pausar">${icon('pause')}</button>
             <button type="button" class="icon-btn sm stop-btn" data-action="parar" data-id="${t.id}" data-date="${t.data}" aria-label="Parar e concluir" title="Parar">${icon('stop')}</button>
           </div>`,
@@ -952,7 +984,7 @@ function blockTools(t, { compact = false } = {}) {
 
 // Resumo do dia (ao lado da agenda): cada tarefa com o horário, a situação e o tempo gasto.
 function resumoRow({ t, vinda }) {
-  const sp = spanOf(t);
+  const sp = spanOf(t, true);
   const sec = elapsed(t);
   const run = isRunning(t);
   const estado = t.concluido ? 'Feita' : t.naoFeito ? 'Não feita' : run ? 'Rodando' : isLate(t) ? 'Atrasada' : 'Pendente';
@@ -961,7 +993,7 @@ function resumoRow({ t, vinda }) {
     <button type="button" class="check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
       data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
     <button type="button" class="rs-main" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir">
-      <span class="rs-title">${esc(t.titulo)}</span>
+      <span class="rs-title">${nomeHTML(t)}</span>
       <span class="rs-meta">${esc(meta)} · <b class="rs-st">${estado}</b></span>
     </button>
     <span class="rs-time${run ? ' on' : sec >= 60 ? '' : ' none'}" ${run ? liveAttrs(t) : ''} title="Tempo gasto">${run ? U.fmtRelogio(sec) : sec >= 60 ? U.fmtDur(sec) : '—'}</span>
@@ -992,17 +1024,34 @@ function viewHoje() {
   // Cada tarefa no horário em que foi feita (sessões do cronômetro) ou, se ainda não foi, no planejado.
   const items = [];
   for (const t of v) {
-    const sp = spanOf(t);
+    const sp = spanOf(t, true);
     if (!sp) continue;
     const s = Math.max(0, sp.s);
     const e = Math.min(1440, sp.e);
     if (e > s) items.push({ t, s, e, sp });
   }
   for (const { t, off } of vindas) {
-    const sp = spanOf(t);
+    const sp = spanOf(t, true);
     const s = Math.max(0, sp.s - off);
     const e = Math.min(1440, sp.e - off);
-    if (e > s) items.push({ t, s, e, sp, vinda: true });
+    if (e > s) items.push({ t, s, e, sp, vinda: true, off });
+  }
+  // Iniciou outra coisa no horário de um bloco planejado (ex.: era Curso, iniciou Trabalho):
+  // o tempo que a outra rodou sai do bloco planejado. Se sobrar nada, o bloco sai da agenda.
+  // Conta só o tempo que de fato rodou (até agora), não o fim planejado da outra tarefa.
+  const reais = items.filter((x) => x.sp.real).map((x) => {
+    const r = spanOf(x.t);
+    const off = x.off || 0;
+    return { t: x.t, s: Math.max(0, r.s - off), e: Math.min(1440, r.e - off) };
+  });
+  for (const x of items.filter((y) => !y.sp.real)) {
+    let partes = [[x.s, x.e]];
+    for (const r of reais) {
+      if (r.t === x.t) continue;
+      partes = partes.flatMap(([a, b]) => (r.e <= a || r.s >= b ? [[a, b]] : [[a, r.s], [r.e, b]]).filter(([c, d]) => d - c >= 5));
+    }
+    if (partes.length === 1 && partes[0][0] === x.s && partes[0][1] === x.e) continue;
+    items.splice(items.indexOf(x), 1, ...partes.map(([a, b]) => ({ ...x, s: a, e: b, cortado: true })));
   }
   items.sort((a, b) => a.s - b.s || a.e - b.e || (a.t.titulo || '').localeCompare(b.t.titulo || '', 'pt-BR'));
   const naAgenda = new Set(items.map((x) => x.t));
@@ -1050,21 +1099,21 @@ function viewHoje() {
   if (cluster.length) flush();
 
   const blocks = items
-    .map(({ t, s, e, sp, vinda, col, cols }) => {
+    .map(({ t, s, e, sp, vinda, cortado, col, cols }) => {
       const cli = cliById(t.clienteId);
       const isNow = isToday && s <= now && now < e;
       const altura = y(e) - y(s);
       const short = altura < 60;
       const late = isLate(t);
-      const sub = [cli?.nome, itemOf(t)?.nome, vinda ? `começou ${U.relativo(t.data).toLowerCase()}` : '', late ? 'Atrasada' : '', t.naoFeito ? 'Não feito' : ''].filter(Boolean).join(' · ');
-      const quando = vinda ? `${U.fromMin(s)}–${sp.aberto ? 'agora' : minTxt(e)}` : spanTxt(sp);
+      const sub = [vinda ? `começou ${U.relativo(t.data).toLowerCase()}` : '', late ? 'Atrasada' : '', t.naoFeito ? 'Não feito' : ''].filter(Boolean).join(' · ');
+      const quando = vinda ? `${U.fromMin(s)}–${sp.aberto ? 'agora' : minTxt(e)}` : cortado ? `${minTxt(s)}–${minTxt(e)}` : spanTxt(sp);
       return `<div class="block${t.concluido ? ' done' : ''}${t.naoFeito ? ' nf' : ''}${isNow ? ' is-now' : ''}${short ? ' short' : ''}${late ? ' late' : ''}${isRunning(t) ? ' running' : ''}${cols > 1 ? ' narrow' : ''}"
         style="--c:${colorOf(t)};top:${y(s)}px;height:${altura}px;left:calc(${col} / ${cols} * 100%);width:calc(100% / ${cols})">
         <button type="button" class="check b-check" role="checkbox" aria-checked="${!!t.concluido}" aria-label="Concluir ${esc(t.titulo)}"
           data-action="toggle" data-id="${t.id}" data-date="${t.data}">${icon('check')}</button>
         <div class="b-text" data-action="open-task" data-id="${t.id}" data-date="${t.data}" title="Abrir cronômetro e notas">
           <span class="block-time">${quando}</span>
-          <span class="block-title">${esc(t.titulo)}</span>
+          <span class="block-title">${nomeHTML(t)}</span>
           ${sub ? `<span class="block-sub">${esc(sub)}</span>` : ''}
         </div>
         ${blockTools(t, { compact: short || cols > 1 })}
@@ -1082,8 +1131,8 @@ function viewHoje() {
   const tempo = sumTime(v);
   const perdido = sumDesperdicio(v);
   const resumo = [...vindas.map(({ t }) => ({ t, vinda: true })), ...v.map((t) => ({ t }))].sort((a, b) => {
-    const x = spanOf(a.t);
-    const z = spanOf(b.t);
+    const x = spanOf(a.t, true);
+    const z = spanOf(b.t, true);
     const sa = x ? x.s - (a.vinda ? 99_999 : 0) : 99_999;
     const sb = z ? z.s - (b.vinda ? 99_999 : 0) : 99_999;
     return sa - sb || (a.t.titulo || '').localeCompare(b.t.titulo || '', 'pt-BR');
@@ -1141,7 +1190,7 @@ function viewCalendario() {
   const tasks = dayTasks(S.calSel);
   let panel = loading();
   if (tasks) {
-    const v = visible(tasks).sort((a, b) => (spanOf(a)?.s ?? 99_999) - (spanOf(b)?.s ?? 99_999) || U.byHorarioTitulo(a, b));
+    const v = visible(tasks).sort((a, b) => (spanOf(a, true)?.s ?? 99_999) - (spanOf(b, true)?.s ?? 99_999) || U.byHorarioTitulo(a, b));
     const removed = tasks.filter((t) => t.removido);
     const pp = progress(tasks);
     const tt = sumTime(v);
@@ -1419,13 +1468,11 @@ function openTaskDetail(t) {
   const cli = cliById(t.clienteId);
   const run = isRunning(t);
   const sec = elapsed(t);
-  const sub = [cat?.nome, cli?.nome, itemOf(t)?.nome].filter(Boolean).map(esc).join(' · ');
   openModal(`<div class="modal-body detail" style="--c:${colorOf(t)}">
     <header class="modal-head">
       <div class="detail-title">
-        <p class="eyebrow">${esc([U.fmtDiaLongo(t.data), spanTxt(spanOf(t))].filter(Boolean).join(' · '))}</p>
-        <h2>${esc(t.titulo)}</h2>
-        ${sub ? `<p class="muted sm"><i class="dot"></i>${sub}</p>` : ''}
+        <p class="eyebrow">${esc([U.fmtDiaLongo(t.data), spanTxt(spanOf(t, true))].filter(Boolean).join(' · '))}</p>
+        <h2>${nomeHTML(t)}</h2>
       </div>
       <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button>
     </header>
@@ -1853,6 +1900,25 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
           ? norm(x.titulo) === norm(titulo)
           : norm(x.servico) === norm(servico) && !x.horario),
   );
+  // ▶ no próprio bloco (ex.: "Cursos 10h30–12h") ou bloco da mesma categoria marcado para agora, ainda sem nada escolhido:
+  // o bloco vira a tarefa (não cria outro card nem conclui o bloco).
+  const minIni = Math.floor(((inicio || Date.now()) - U.parseYmd(today).getTime()) / 60_000);
+  const livreDoBloco = (x) =>
+    x && !x.removido && !fechada(x) && !isRunning(x) && x.categoriaId === categoriaId &&
+    (!x.clienteId || x.clienteId === c?.id) && (!x.itemId || x.itemId === it?.id);
+  let b = bloco ? list.find((x) => x.id === bloco) : null;
+  if (!livreDoBloco(b)) b = null;
+  if (!b && !t) {
+    b = visible(list).find((x) => livreDoBloco(x) && !x.clienteId && !x.itemId && !elapsed(x) && x.horario &&
+      U.toMin(x.horario) - 15 <= minIni && minIni < U.toMin(x.horario) + duracao(x));
+  }
+  if (b) {
+    const patch = { clienteId: c?.id || null, itemId: it?.id || null, servico: servico || null, pessoa: pessoa || null };
+    if (nomeGenerico(b, c)) patch.titulo = titulo;
+    Object.assign(b, patch);
+    ops.push({ type: 'update', col: 'dailyTasks', id: b.id, data: patch });
+    t = b;
+  }
   if (!t) {
     t = {
       id: U.newId(), titulo, categoriaId, clienteId: c?.id || null, itemId: it?.id || null, servico: servico || null, pessoa: pessoa || null,
@@ -1868,17 +1934,11 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
     if (pessoa && !(c.pessoas || []).some((p) => norm(p) === norm(pessoa))) patch.pessoas = c.pessoas = [pessoa, ...(c.pessoas || [])].slice(0, 60);
     if (Object.keys(patch).length) ops.push({ type: 'update', col: 'clients', id: c.id, data: patch });
   }
-  // Veio de um bloco da rotina (ex.: "Cursos 8h–12h"): o bloco cumpriu o papel e sai das pendentes.
-  const b = bloco && list.find((x) => x.id === bloco);
-  if (b && b !== t && !b.concluido && !elapsed(b)) {
-    b.concluido = true;
-    ops.push({ type: 'update', col: 'dailyTasks', id: b.id, data: { concluido: true } });
-  }
   if (!isRunning(t) || inicio) startTimer(t, ops, inicio || Date.now());
   closeModal();
   render();
   persist(db.batch(ops));
-  toast(`Cronômetro ligado${inicio ? ` desde ${hhmm(t.cronometroInicio)}` : ''}: ${t.titulo}${c ? ` · ${c.nome}` : ''}`);
+  toast(`Cronômetro ligado${inicio ? ` desde ${hhmm(t.cronometroInicio)}` : ''}: ${nomeTxt(t)}`);
 }
 
 // Depois de play/pausa/concluir, atualiza o painel da tarefa se ele estiver aberto.
