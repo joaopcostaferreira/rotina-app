@@ -1764,11 +1764,25 @@ export function createFin(ctx) {
   // Filtro por descrição guardado enquanto a fatura do mesmo cartão estiver aberta.
   let fatFiltro = { id: '', cat: '', ym: '' };
   const catDaTx = (t) => t.catId || '-';
+  // Ordem da fatura (como no app do Nubank): o que você lançou aqui vem em cima, do último lançado para o primeiro.
+  // Embaixo, pela data da compra, o que é meio fixo: assinaturas, parcelas 2, 3… e o histórico importado do Notion.
+  function ordemFatura() {
+    const lote = new Map();
+    for (const t of F().tx) lote.set(t.criadoEm || 0, (lote.get(t.criadoEm || 0) || 0) + 1);
+    const quando = (t) => t.mexidoEm || t.criadoEm || 0;
+    const lancado = (t) =>
+      !t.assinaturaId && !(t.parcela > 1) && (!!t.mexidoEm || (!!t.criadoEm && !t.importado && lote.get(t.criadoEm) < 20));
+    const porData = (a, b) => (b.dataCompra || '').localeCompare(a.dataCompra || '') || b.valor - a.valor;
+    return (a, b) => {
+      const la = lancado(a);
+      const lb = lancado(b);
+      if (la !== lb) return la ? -1 : 1;
+      return la ? quando(b) - quando(a) || porData(a, b) : porData(a, b);
+    };
+  }
   function faturaLista(k) {
     const todas = fatura(k, fatFiltro.ym || S.finMes);
-    const fat = (fatFiltro.cat ? todas.filter((t) => catDaTx(t) === fatFiltro.cat) : todas).sort(
-      (a, b) => (b.dataCompra || '').localeCompare(a.dataCompra || '') || b.valor - a.valor,
-    );
+    const fat = (fatFiltro.cat ? todas.filter((t) => catDaTx(t) === fatFiltro.cat) : todas).sort(ordemFatura());
     const total = fatFiltro.cat ? `${brl(soma(fat))} <small class="muted">de ${brl(soma(todas))}</small>` : brl(soma(fat));
     return `<p class="fin-big sm">${total}</p>
       ${fat.length ? `<ul class="tx-list">${fat.map((t) => txRow(t, { data: false })).join('')}</ul>` : '<p class="muted">Nenhuma compra nesta fatura.</p>'}`;
