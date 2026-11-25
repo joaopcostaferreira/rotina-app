@@ -140,6 +140,8 @@ async function createFirebase() {
         for (const op of ops.slice(i, i + 450)) {
           const ref = docRef(op.col, op.id);
           if (op.type === 'set') b.set(ref, clean({ ...op.data, uid }));
+          // merge: junta com o que já existe (não apaga o que outro aparelho gravou).
+          else if (op.type === 'merge') b.set(ref, clean({ ...op.data, uid }), { merge: true });
           else if (op.type === 'update') b.update(ref, clean(op.data));
           else b.delete(ref);
         }
@@ -227,6 +229,7 @@ function createLocal() {
       for (const op of ops) {
         const m = (touched[op.col] ??= read(op.col, {}));
         if (op.type === 'set') m[op.id] = clean({ ...op.data, uid: user.uid });
+        else if (op.type === 'merge') m[op.id] = { ...m[op.id], ...clean({ ...op.data, uid: user.uid }) };
         else if (op.type === 'update') m[op.id] = { ...m[op.id], ...clean(op.data) };
         else delete m[op.id];
       }

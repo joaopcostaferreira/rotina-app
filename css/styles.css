@@ -5054,3 +5054,14 @@ fieldset.field legend { padding: 0; margin-bottom: 6px; font-size: 13px; font-we
 .comecei-campo select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .terminou-fim .comecei-campo { flex: 1 1 100%; margin: 0; }
 .terminou-fim .comecei-campo + .comecei-campo { flex: 1 1 auto; }
+
+/* v40: polimento no celular */
+@media (max-width: 560px) {
+  .diario-todas span { display: none; }
+  .diario-todas { width: 40px; padding: 0; justify-content: center; flex: none; }
+}
+@media (max-width: 560px) {
+  .rel-tiles > .rel-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+/* Nome da data em até 2 linhas, sem cortar com "..." logo de cara */
+.aniv-nome strong { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }

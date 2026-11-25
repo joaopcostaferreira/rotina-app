@@ -138,6 +138,8 @@ const subsOf = (cat) => (cat?.subtarefas || []).filter(Boolean);
 const visible = (tasks) => (tasks || []).filter((t) => !t.removido);
 // Tarefa resolvida: concluída ou marcada com X (não feita). Nenhuma das duas fica como pendente.
 const fechada = (t) => !!(t.concluido || t.naoFeito);
+// Já tem algo feito nela (terminada, rodando, tempo, sessões ou notas): mudar a rotina não pode apagar isso.
+const temRegistro = (t) => fechada(t) || !!t.cronometroInicio || t.tempoGasto > 0 || !!t.sessoes?.length || !!String(t.notas || '').trim();
 const duracao = (t) => t.duracao || (t.fimAberto ? 90 : S.profile.duracaoPadrao || 30); // sem hora de fim: só para desenhar a agenda
 const firstName = () => S.profile.apelido || (S.user?.nome || '').split(' ')[0] || 'você';
 const sortCats = () =>
@@ -228,7 +230,18 @@ modal.addEventListener('close', () => {
     askResolver = null;
     r(false);
   }
+  // Voltou ao app com a janela aberta: agora que fechou, busca os dias de novo (depois do que estava em andamento).
+  if (recarregarDias) setTimeout(() => !modal.open && recarregarDias && recarregaDias(), 300);
 });
+// Busca os dias de novo (ex.: o app ficou escondido e outro aparelho pode ter mudado algo).
+let recarregarDias = false;
+function recarregaDias() {
+  recarregarDias = false;
+  S.days = {};
+  S.ensured = new Set();
+  S.ranges = new Set();
+  render();
+}
 let fundoDown = false;
 modal.addEventListener('pointerdown', (e) => {
   fundoDown = e.target === modal;
@@ -297,7 +310,9 @@ function ensureDay(date) {
     const existing = await db.where('dailyTasks', 'data', '==', date);
     const have = new Set(existing.map((t) => t.recurringTaskId).filter(Boolean));
     const created = S.recurring.filter((r) => recurringApplies(r, date) && !have.has(r.id)).map((r) => instanceFrom(r, date));
-    persist(db.batch(created.map((t) => ({ type: 'set', col: 'dailyTasks', id: t.id, data: t }))));
+    // Grava juntando (merge) e sem "concluido/removido": se outro aparelho já criou e mexeu nessa tarefa
+    // (sem internet aqui, por exemplo), o que foi feito lá não é apagado.
+    persist(db.batch(created.map(({ concluido, removido, ...data }) => ({ type: 'merge', col: 'dailyTasks', id: data.id, data }))));
     S.days[date] = [...existing, ...created];
     S.ensured.add(date);
     return S.days[date];
@@ -380,6 +395,13 @@ function resetState() {
     diarioDate: null,
     journal: null,
     journalBusca: '',
+    // Ao trocar de conta nada da anterior pode ficar na memória (datas importantes, avisos da tela).
+    anivs: null,
+    datasCats: null,
+    anivBusca: '',
+    anivCat: 'todas',
+    pedirConclusao: null,
+    diaPop: null,
   });
 }
 
@@ -704,6 +726,12 @@ function startTimer(t, ops, inicio = Date.now()) {
   ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { cronometroInicio: ini, sessoes: t.sessoes } });
 }
 
+// Cronômetro ligado em outro dia: " de ontem" ou " do dia 23/11" (hoje: nada).
+const desdeDia = (ms) => {
+  const d = U.ymd(new Date(ms));
+  if (d === U.todayStr()) return '';
+  return d === U.addDays(U.todayStr(), -1) ? ' de ontem' : ` do dia ${d.slice(8, 10)}/${d.slice(5, 7)}`;
+};
 const hhmm = (ms) => {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -927,7 +955,7 @@ function viewPainel() {
       ? 'Nenhuma tarefa para hoje.'
       : p.done === p.total
         ? 'Tudo feito hoje. 🎉'
-        : `${porVir ? `Faltam ${porVir}.` : 'Nada mais por vir hoje.'}${atras ? ` <span class="late-txt">${atras} atrasada${atras > 1 ? 's' : ''}.</span>` : ''}`;
+        : `${porVir ? `${porVir > 1 ? 'Faltam' : 'Falta'} ${porVir}.` : 'Nada mais por vir hoje.'}${atras ? ` <span class="late-txt">${atras} atrasada${atras > 1 ? 's' : ''}.</span>` : ''}`;
   const leg = [
     ['ok', p.done, 'feita', 'feitas'],
     ['nf', p.nao, 'não feita', 'não feitas'],
@@ -1022,7 +1050,7 @@ function viewPainel() {
         .map(
           (t) => `<div class="running-now" style="--c:${colorOf(t)}">
             <span class="running-icon">${icon('cronometro')}</span>
-            <div><span class="now-title">${nomeHTML(t)}</span><span class="now-sub">desde ${hhmm(t.cronometroInicio)}${t.data !== today ? ` de ${esc(U.relativo(t.data).toLowerCase())}` : ''} · <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
+            <div><span class="now-title">${nomeHTML(t)}</span><span class="now-sub">desde ${hhmm(t.cronometroInicio)}${desdeDia(t.cronometroInicio)} · <strong ${liveAttrs(t)}>${U.fmtRelogio(elapsed(t))}</strong></span></div>
             <button type="button" class="icon-btn sm" data-action="timer" data-id="${t.id}" data-date="${t.data}" aria-label="Pausar cronômetro" title="Pausar">${icon('pause')}</button>
             <button type="button" class="icon-btn sm stop-btn" data-action="parar" data-id="${t.id}" data-date="${t.data}" aria-label="Parar e concluir" title="Parar">${icon('stop')}</button>
             ${xBtn(t)}
@@ -1412,7 +1440,13 @@ function viewClientes() {
     const sec = sumTime(tt);
     const servs = servicosOf(cli);
     const podeIniciar = isAtivo(cli) && !cli.soFinanceiro;
-    const status = !isAtivo(cli) ? 'Finalizado' : cli.soFinanceiro ? 'Só financeiro' : tt.length ? `${tt.filter((t) => !fechada(t)).length} pendente(s) hoje` : 'Nada hoje';
+    const pend = tt.filter((t) => !fechada(t)).length;
+    const rodando = runningTasks().some((t) => t.clienteId === cli.id);
+    const status = !isAtivo(cli)
+      ? 'Finalizado'
+      : cli.soFinanceiro
+        ? 'Só financeiro'
+        : `${rodando ? 'Rodando agora · ' : ''}${pend ? `${pend} pendente${pend > 1 ? 's' : ''} hoje` : tt.length ? 'Tudo feito hoje' : rodando ? 'nada mais hoje' : 'Nada hoje'}`;
     return `<article class="card client-card${isAtivo(cli) ? '' : ' off'}" style="--c:${workColor()}">
       <header>
         <div><h3>${esc(cli.nome)}</h3>
@@ -2031,6 +2065,7 @@ async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloc
   let t = visible(list).find(
     (x) =>
       !fechada(x) &&
+      !(fim && inicio && isRunning(x)) && // "Já terminei" de um bloco passado não entra na tarefa que está rodando
       x.categoriaId === categoriaId &&
       (x.clienteId || null) === (c?.id || null) &&
       (x.itemId || null) === (it?.id || null) &&
@@ -2712,7 +2747,7 @@ function journalListHTML() {
   const entries = Object.values(S.journal || {})
     .filter((e) => e.texto?.trim() && (!q || e.texto.toLowerCase().includes(q)))
     .sort((a, b) => b.id.localeCompare(a.id));
-  if (!entries.length) return `<p class="muted sm journal-vazio">${q ? 'Nada encontrado.' : 'Suas anotações aparecem aqui. Toque em “Nova anotação” para escrever a de hoje.'}</p>`;
+  if (!entries.length) return `<p class="muted sm journal-vazio">${q ? 'Nada encontrado.' : 'Suas anotações aparecem aqui. Toque em “Nova” para escrever a de hoje.'}</p>`;
   return entries
     .map((e) => {
       const txt = e.texto.trim();
@@ -2766,7 +2801,7 @@ function viewDiario() {
     <div class="daynav">
       <button type="button" class="icon-btn" data-action="diario-lista" aria-label="Voltar para as anotações" title="Todas as anotações">${icon('left')}</button>
       <div class="daynav-title"><span class="eyebrow">Diário · ${esc(U.relativo(d))} · ${isToday ? clockHTML() : `hoje é ${agoraHTML()}`}</span><h1>${esc(U.fmtDiaLongo(d))}</h1></div>
-      <button type="button" class="btn ghost sm" data-action="diario-lista">${icon('diario')}Todas as anotações</button>
+      <button type="button" class="btn ghost sm diario-todas" data-action="diario-lista" aria-label="Todas as anotações" title="Todas as anotações">${icon('diario')}<span>Todas as anotações</span></button>
     </div>
   </header>
   <div class="journal-layout">
@@ -2988,9 +3023,12 @@ async function planImport(data) {
     if (it.horario && !parseHora(it.horario)) plan.avisos.push(`“${titulo}”: horário não entendido, ficou sem horário.`);
     const cat = getCat(it.categoria || 'Geral');
     const cli = getCli(it.cliente, it.categoria);
+    // id fixo: importar o mesmo arquivo de novo atualiza a tarefa em vez de duplicar.
+    // Duas com o mesmo nome no mesmo dia (horários diferentes) ganham ids diferentes, para nenhuma sumir.
+    let id = `imp_${hashId(`${it.data}|${norm(titulo)}|${cli?.id || ''}`)}`;
+    if (plan.tasks.some((x) => x.id === id)) id = `imp_${hashId(`${it.data}|${norm(titulo)}|${cli?.id || ''}|${it.horario || ''}|${plan.tasks.length}`)}`;
     plan.tasks.push({
-      // id fixo: importar o mesmo arquivo de novo atualiza a tarefa em vez de duplicar.
-      id: `imp_${hashId(`${it.data}|${norm(titulo)}|${cli?.id || ''}`)}`,
+      id,
       titulo, data: it.data, categoriaId: cat.id, clienteId: cli?.id || null,
       itemId: (it.item && itensDe(cat).find((x) => norm(x.nome) === norm(it.item))?.id) || null,
       servico: cli ? String(it.servico ?? titulo).trim() : null,
@@ -3072,7 +3110,7 @@ async function applyImport(plan, substituir) {
   if (substituir) {
     // Mesma regra de excluir uma tarefa fixa: some dos próximos dias, o passado e o concluído ficam.
     const futuras = await db.range('dailyTasks', 'data', today, '9999-12-31');
-    futuras.filter((t) => t.origem === 'fixa' && !fechada(t)).forEach((t) => ops.push({ type: 'delete', col: 'dailyTasks', id: t.id }));
+    futuras.filter((t) => t.origem === 'fixa' && !temRegistro(t)).forEach((t) => ops.push({ type: 'delete', col: 'dailyTasks', id: t.id }));
     S.recurring.forEach((r) => ops.push({ type: 'delete', col: 'recurringTasks', id: r.id }));
     S.recurring = [];
   }
@@ -3085,7 +3123,9 @@ async function applyImport(plan, substituir) {
     Object.assign((u.col === 'clients' ? cliById : catById)(u.id) || {}, u.data);
   });
   recs.forEach((r) => set('recurringTasks', r));
-  plan.tasks.forEach((t) => set('dailyTasks', t));
+  // Junta (merge) com a tarefa que já existir: o tempo, as sessões e o que já foi concluído no app não se perdem.
+  plan.tasks.forEach(({ concluido, removido, notas, ...t }) =>
+    ops.push({ type: 'merge', col: 'dailyTasks', id: t.id, data: { ...t, ...(concluido ? { concluido } : {}), ...(notas ? { notas } : {}) } }));
   plan.diario.forEach((j) => ops.push({ type: 'set', col: 'journal', id: j.data, data: { data: j.data, texto: j.texto, atualizadoEm: Date.now() } }));
 
   S.categories.push(...plan.cats);
@@ -4119,7 +4159,11 @@ const FORMS = {
       duracao: (f.horario && durDoForm(form)) || null,
       ...avisoData(f),
     };
-    if (!patch.titulo) return;
+    // Nome só com espaços: avisa e libera o Salvar de novo (antes o botão ficava travado).
+    if (!patch.titulo) {
+      delete form.dataset.salvando;
+      return toast('Dê um nome para a tarefa.'), form.elements.titulo?.focus();
+    }
     // Serviço novo fica guardado no cliente para a próxima vez.
     if (cli && !servicosOf(cli).some((x) => norm(x) === norm(patch.titulo))) {
       cli.servicos = [...servicosOf(cli), patch.titulo];
@@ -4252,8 +4296,10 @@ const FORMS = {
       const ops = [{ type: 'update', col: 'recurringTasks', id, data }];
       for (const t of inst) {
         if (t.data < today || fechada(t)) continue;
-        if (!repeatsOn(data, t.data)) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
-        else if (t.ajustado) {
+        // Com algo feito (tempo, sessões, notas): nunca apaga; só leva o nome/categoria novos, mantendo o horário do dia.
+        if (!repeatsOn(data, t.data) && !temRegistro(t)) ops.push({ type: 'delete', col: 'dailyTasks', id: t.id });
+        else if (!repeatsOn(data, t.data)) continue;
+        else if (t.ajustado || temRegistro(t)) {
           // Dia com horário ajustado à mão (encaixe): mantém o horário daquele dia.
           const { horario, duracao: _dur, fimAberto, ...resto } = fields;
           ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: resto });
@@ -4773,7 +4819,7 @@ const ACTIONS = {
     persist(
       db.batch([
         { type: 'delete', col: 'recurringTasks', id },
-        ...inst.filter((t) => t.data >= today && !fechada(t)).map((t) => ({ type: 'delete', col: 'dailyTasks', id: t.id })),
+        ...inst.filter((t) => t.data >= today && !temRegistro(t)).map((t) => ({ type: 'delete', col: 'dailyTasks', id: t.id })),
       ]),
     );
     invalidateFrom(today);
@@ -5094,10 +5140,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
   } else if (S.user && S.ready && Date.now() - hiddenAt > 5 * 60_000) {
-    S.days = {};
-    S.ensured = new Set();
-    S.ranges = new Set();
-    if (!modal.open) render();
+    // Com uma janela aberta (notas, Concluir…), recarrega só quando ela fechar: senão a janela perde a tarefa.
+    if (modal.open) recarregarDias = true;
+    else recarregaDias();
   }
 });
 

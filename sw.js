@@ -1,7 +1,7 @@
 // Service worker: permite instalar o app e abrir sem internet.
 // Estratégia "rede primeiro": sempre busca a versão nova e usa o cache só se estiver offline.
 
-const CACHE = 'rotina-v39';
+const CACHE = 'rotina-v40';
 const SHELL = [
   './',
   './index.html',
@@ -82,7 +82,9 @@ self.addEventListener('push', (e) => {
 // Tocar no aviso abre o app (ou traz para a frente se já estiver aberto).
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = new URL(e.notification.data?.url || './#/hoje', self.registration.scope).href;
+  let url = new URL(e.notification.data?.url || './#/hoje', self.registration.scope).href;
+  // Só abre páginas do próprio app (um aviso nunca leva para outro site).
+  if (!url.startsWith(self.registration.scope)) url = new URL('./#/hoje', self.registration.scope).href;
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const open = list.find((c) => c.url.startsWith(self.registration.scope));

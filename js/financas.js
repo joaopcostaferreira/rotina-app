@@ -66,6 +66,8 @@ export function createFin(ctx) {
           estim: estim.sort((a, b) => (a.dia || 99) - (b.dia || 99) || (a.motivo || '').localeCompare(b.motivo || '', 'pt-BR')),
           emp: emp.sort((a, b) => (b.data || '').localeCompare(a.data || '')),
         };
+        // Lançamento sem data (ex.: veio assim do Notion): só na memória, vira texto vazio para a tela não quebrar.
+        for (const t of [...tx, ...transf]) if (typeof t.data !== 'string') t.data = t.venc || t.dataCompra || '';
         geraAssinaturas();
         render();
       })
@@ -149,6 +151,8 @@ export function createFin(ctx) {
     return m;
   }
   const soma = (arr) => r2(arr.reduce((s, t) => s + t.valor, 0));
+  // "Saldo inicial" de uma conta: entra no saldo, mas não é ganho nem gasto do mês.
+  const ehSaldoIni = (t) => t.saldoInicial === true || (t.nome === 'Saldo inicial' && !t.catId && !t.clienteId && !t.cartaoId);
   const doMes = (ym) => F().tx.filter((t) => t.data?.startsWith(ym));
   const doCartao = (id) => F().tx.filter((t) => t.cartaoId === id);
   const usado = (k) => soma(doCartao(k.id).filter((t) => !t.realizado && t.tipo === 'saida'));
@@ -168,9 +172,10 @@ export function createFin(ctx) {
     return diaNoMes((dia || 1) <= fecha ? mesFecha : U.addMonths(mesFecha, -1), dia || 1);
   }
   function novaCobranca(e, k, ym) {
-    // Id fixo por assinatura e mês: dois aparelhos abertos não lançam em dobro.
+    // Id fixo por assinatura, cartão e mês: dois aparelhos abertos não lançam em dobro,
+    // e trocar a assinatura de cartão não sobrescreve a cobrança que ficou no cartão antigo.
     return {
-      id: `a_${e.id}_${ym}`, nome: e.motivo, tipo: 'saida', valor: e.valor, data: diaNoMes(ym, k.venc || 10), dataCompra: compraNaFatura(k, ym, e.dia),
+      id: `a_${e.id}_${k.id}_${ym}`, nome: e.motivo, tipo: 'saida', valor: e.valor, data: diaNoMes(ym, k.venc || 10), dataCompra: compraNaFatura(k, ym, e.dia),
       contaId: k.contaId || null, cartaoId: k.id, catId: e.catId || null, clienteId: null, realizado: false, obs: null, assinaturaId: e.id, criadoEm: Date.now(),
     };
   }
@@ -303,7 +308,7 @@ export function createFin(ctx) {
     const sal = saldos();
     const total = r2(Object.values(sal).reduce((s, v) => s + v, 0));
     const ym = S.finMes;
-    const mes = doMes(ym).filter((t) => t.contaId || t.cartaoId);
+    const mes = doMes(ym).filter((t) => (t.contaId || t.cartaoId) && !ehSaldoIni(t));
     const ent = mes.filter((t) => t.tipo === 'entrada');
     const sai = mes.filter((t) => t.tipo === 'saida');
     const fim = fimDoMes(ym);
@@ -504,7 +509,8 @@ export function createFin(ctx) {
   }
   function contaOptions(sel) {
     const contas = F().contas.filter((c) => !c.arquivada || c.id === sel);
-    return `${sel ? '' : '<option value="">Escolha…</option>'}${contas.map((c) => opt(c.id, c.nome, sel)).join('')}`;
+    // Sem conta (ou a conta não existe mais): pede para escolher, em vez de cair na primeira sem avisar.
+    return `${contas.some((c) => c.id === sel) ? '' : '<option value="">Escolha…</option>'}${contas.map((c) => opt(c.id, c.nome, sel)).join('')}`;
   }
   function openEmp(e) {
     const editing = !!e.id;
@@ -602,7 +608,7 @@ export function createFin(ctx) {
     const fat = fatura(k, ym);
     const valorFat = soma(fat);
     const aberta = fat.filter((t) => !t.realizado);
-    const estado = !fat.length ? 'Sem compras' : aberta.length ? `vence ${String(k.venc || 10).padStart(2, '0')}/${ym.slice(5)}` : 'Paga';
+    const estado = !fat.length ? 'Sem compras' : aberta.length ? `vence ${diaMes(diaNoMes(ym, k.venc || 10))}` : 'Paga';
     return `<div class="fin-cartao" style="--c:${k.cor || '#8b5cf6'}">
       <div class="fin-cartao-top">
         <button type="button" class="link-plain" data-action="fin-edit-cartao" data-id="${k.id}"><span class="dot"></span><strong>${esc(k.nome)}</strong></button>
@@ -670,10 +676,17 @@ export function createFin(ctx) {
         if (!t.realizado && t.data <= fim) v += sinal(t) * t.valor;
         if (t.realizado && t.data > fim && fim < hoje) v -= sinal(t) * t.valor;
       }
+      // Meses que já passaram: desfaz também os empréstimos e abatimentos feitos depois do fim do mês.
+      if (fim < hoje) {
+        for (const e of F().emp) {
+          if (e.contaId in sal && (e.data || '') > fim) v += e.valor;
+          for (const a of e.abat || []) if (a.contaId in sal && (a.data || '') > fim) v -= a.valor;
+        }
+      }
       return r2(v);
     };
     const linhas = meses.map((ym) => {
-      const ts = comConta.filter((t) => t.data.startsWith(ym));
+      const ts = comConta.filter((t) => t.data.startsWith(ym) && !ehSaldoIni(t));
       const e = soma(ts.filter((t) => t.tipo === 'entrada'));
       const s = soma(ts.filter((t) => t.tipo === 'saida'));
       return { ym, e, s, r: r2(e - s), fim: saldoFim(ym) };
@@ -714,7 +727,8 @@ export function createFin(ctx) {
     // Futuras: o que vence depois deste mês (histórico do Notion) e as parcelas 2, 3… do que foi lançado aqui.
     // Ficam fora da lista normal e aparecem só no botão "Futuras".
     const limite = fimDoMes(hoje.slice(0, 7));
-    const nivel = (t) => (!veioDoNotion(t) ? (t.parcela > 1 ? 2 : 0) : (t.data || '') <= limite ? 1 : 2);
+    // Parcela 2, 3… só fica em "Futuras" enquanto vence depois deste mês; quando chega a vez, volta para a lista.
+    const nivel = (t) => (!veioDoNotion(t) ? (t.parcela > 1 && (t.data || '') > limite ? 2 : 0) : (t.data || '') <= limite ? 1 : 2);
     const futuras = f.tipo === 'futuras';
     // Assinatura de fatura futura não aparece aqui: fica só na fatura e em Assinaturas.
     // Contas ou cartões (um de cada vez) e, se escolhido, qual.
@@ -1241,7 +1255,7 @@ export function createFin(ctx) {
     const base = U.todayStr().slice(0, 7);
     const meses = new Set(Array.from({ length: 16 }, (_, i) => U.addMonths(base, i - 3)));
     if (sel) meses.add(sel);
-    return [...meses].sort().map((m) => opt(m, `${U.fmtMes(m)} (vence dia ${k?.venc || 10})`, sel)).join('');
+    return [...meses].sort().map((m) => opt(m, `${U.fmtMes(m)} (vence dia ${Number(diaNoMes(m, k?.venc || 10).slice(8))})`, sel)).join('');
   }
 
   function catOptions(sel, tipo) {
@@ -1554,9 +1568,10 @@ export function createFin(ctx) {
     const c = { id: U.newId(), ...data, ordem: F().contas.length };
     F().contas.push(c);
     const ops = [{ type: 'set', col: COLS.contas, id: c.id, data: c }];
-    const saldo = f.saldo ? Number(String(f.saldo).replace(/[R$\s.]/g, '').replace(',', '.')) : 0;
+    // Mesmo leitor de valor dos outros campos ("1.500,50", "1500.50" ou "1500,5"); "-" na frente é saldo negativo.
+    const saldo = f.saldo ? (/^\s*-/.test(f.saldo) ? -1 : 1) * (valorDe(f.saldo) || 0) : 0;
     if (saldo) {
-      const t = { id: U.newId(), nome: 'Saldo inicial', tipo: saldo > 0 ? 'entrada' : 'saida', valor: r2(Math.abs(saldo)), data: U.todayStr(), contaId: c.id, cartaoId: null, catId: null, clienteId: null, realizado: true, criadoEm: Date.now() };
+      const t = { id: U.newId(), nome: 'Saldo inicial', tipo: saldo > 0 ? 'entrada' : 'saida', valor: r2(Math.abs(saldo)), data: U.todayStr(), contaId: c.id, cartaoId: null, catId: null, clienteId: null, realizado: true, saldoInicial: true, criadoEm: Date.now() };
       F().tx.push(t);
       ops.push({ type: 'set', col: COLS.tx, id: t.id, data: t });
     }
@@ -1736,6 +1751,13 @@ export function createFin(ctx) {
     const e = id ? antes : F().estim.find((x) => x.motivo === data.motivo && x.cartaoId === data.cartaoId && !x.geradoAte);
     const ops = [];
     if (e) limpaDepois(e, ops);
+    // Trocou de cartão: as cobranças automáticas do cartão antigo que ainda nem aconteceram saem (o novo cartão lança as dele).
+    if (antes && antes.cartaoId !== f.cartaoId) {
+      const hoje = U.todayStr();
+      const velhas = F().tx.filter((t) => t.assinaturaId === antes.id && t.id.startsWith('a_') && t.cartaoId === antes.cartaoId && !t.realizado && (t.dataCompra || t.data || '') > hoje);
+      F().tx = F().tx.filter((t) => !velhas.includes(t));
+      for (const t of velhas) ops.push({ type: 'delete', col: COLS.tx, id: t.id });
+    }
     if (ops.length) persist(db.batch(ops));
     if (geraAssinaturas() || ops.length) render();
     const volta = form.dataset.volta && cartaoById(form.dataset.volta);
@@ -1936,6 +1958,8 @@ export function createFin(ctx) {
     planoImport = null;
     const { data } = p;
     const ops = [];
+    // Nome de cada conta de antes: os empréstimos (que ficam) passam para a conta nova de mesmo nome.
+    const nomeConta = Object.fromEntries(F().contas.map((c) => [c.id, c.nome]));
     // Apaga o que existe (substituir).
     for (const [k, col] of Object.entries(COLS)) if (k !== 'emp') for (const d of F()[k]) ops.push({ type: 'delete', col, id: d.id });
     const id = {};
@@ -1977,6 +2001,13 @@ export function createFin(ctx) {
       add('transf', { id: U.newId(), nome: t.nome, valor: r2(t.valor), data: t.data, deId: ref('conta', t.de), paraId: ref('conta', t.para), realizado: !!t.realizado, noNotion: true });
     }
     for (const e of data.estimativas || []) add('estim', { id: U.newId(), motivo: e.motivo, valor: r2(e.valor), dia: e.dia || null, onde: e.onde || 'conta', ultParcela: e.ultParcela || null });
+    // Empréstimos: a conta de cada um (e de cada abatimento) vira a conta nova com o mesmo nome.
+    const novaConta = (cid) => ref('conta', nomeConta[cid]) || cid;
+    for (const e of F().emp) {
+      const contaId = novaConta(e.contaId);
+      const abat = (e.abat || []).map((a) => ({ ...a, contaId: novaConta(a.contaId) }));
+      if (contaId !== e.contaId || abat.some((a, i) => a.contaId !== e.abat[i].contaId)) ops.push({ type: 'update', col: COLS.emp, id: e.id, data: { contaId, abat } });
+    }
 
     closeModal();
     toast('Importando… não feche o app.');
@@ -2185,8 +2216,10 @@ export function createFin(ctx) {
       if (!abertas.length) return;
       const conta = contaById(k.contaId)?.nome || 'a conta';
       if (!(await ask(`Pagar a fatura de ${mesCurto(ym)} do ${k.nome}? ${brl(soma(abertas))} saem de ${conta}.`, 'Pagar fatura', false))) return;
-      for (const t of abertas) t.realizado = true;
-      persist(db.batch(abertas.map((t) => ({ type: 'update', col: COLS.tx, id: t.id, data: { realizado: true } }))));
+      // O dinheiro sai da conta que paga o cartão hoje (a das compras pode ser uma antiga).
+      const pagaCom = k.contaId && contaById(k.contaId) ? k.contaId : null;
+      for (const t of abertas) Object.assign(t, { realizado: true }, pagaCom ? { contaId: pagaCom } : {});
+      persist(db.batch(abertas.map((t) => ({ type: 'update', col: COLS.tx, id: t.id, data: pagaCom ? { realizado: true, contaId: pagaCom } : { realizado: true } }))));
       toast('Fatura paga.');
       render();
     },
@@ -2194,7 +2227,7 @@ export function createFin(ctx) {
       const k = col || 'tx';
       const doc = achar(k, id);
       if (!doc) return closeModal();
-      if (k === 'contas' && (F().tx.some((t) => t.contaId === id) || F().transf.some((t) => t.deId === id || t.paraId === id) || F().cartoes.some((c) => c.contaId === id) || F().emp.some((e) => e.contaId === id))) {
+      if (k === 'contas' && (F().tx.some((t) => t.contaId === id) || F().transf.some((t) => t.deId === id || t.paraId === id) || F().cartoes.some((c) => c.contaId === id) || F().emp.some((e) => e.contaId === id || (e.abat || []).some((a) => a.contaId === id)))) {
         return toast('Esta conta tem lançamentos. Marque “Arquivada” em vez de excluir.');
       }
       if (k === 'cartoes' && F().tx.some((t) => t.cartaoId === id)) return toast('Este cartão tem lançamentos e não pode ser excluído.');
@@ -2203,8 +2236,18 @@ export function createFin(ctx) {
       if (k === 'emp' && recebido(doc) && !(await ask(`“${doc.nome}” já tem ${brl(recebido(doc))} abatido. Excluir apaga também esses recebimentos.`, 'Continuar'))) return openEmp(doc);
       if (!(await ask(`Excluir “${nome}”?`))) return openAgain(k, doc);
       F()[k] = F()[k].filter((x) => x !== doc);
-      if (k === 'cats') for (const t of F().tx) if (t.catId === id) t.catId = null;
-      persist(db.remove(COLS[k], id));
+      const ops = [{ type: 'delete', col: COLS[k], id }];
+      // Descrição excluída: os lançamentos e estimativas que a usavam ficam "sem descrição" também no banco.
+      if (k === 'cats') {
+        for (const [lista, col] of [[F().tx, COLS.tx], [F().estim, COLS.estim]]) {
+          for (const t of lista) {
+            if (t.catId !== id) continue;
+            t.catId = null;
+            ops.push({ type: 'update', col, id: t.id, data: { catId: null } });
+          }
+        }
+      }
+      persist(db.batch(ops));
       render();
     },
     'fin-export': () => openExport(),

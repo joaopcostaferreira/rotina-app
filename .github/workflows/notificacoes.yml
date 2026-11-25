@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # não guarda o token do GitHub na pasta (o passo de enviar não precisa dele)
 
       - uses: actions/setup-node@v4
         with:

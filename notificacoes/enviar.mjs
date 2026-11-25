@@ -213,7 +213,7 @@ for (const u of usuarios.docs) {
     total += await processarUsuario(u);
   } catch (err) {
     falhas++;
-    console.error(`Erro no usuário ${u.id}:`, err.message);
+    console.error(`Erro no usuário ${u.id.slice(0, 4)}…:`, err.message); // o log do GitHub é público: só o começo do id
   }
 }
 console.log(`${usuarios.size} usuário(s) verificados, ${total} aviso(s) enviados.`);
