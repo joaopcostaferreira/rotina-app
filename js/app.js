@@ -219,6 +219,8 @@ function closeModal() {
   if (modal.open) modal.close();
 }
 modal.addEventListener('close', () => {
+  // Fechou e já abriu outra janela (ex.: concluiu e veio a pergunta de sobrescrever): o aviso atrasado não vale para a nova.
+  if (modal.open) return;
   flushSaves();
   delete modal.dataset.detail;
   if (askResolver) {
@@ -1851,7 +1853,9 @@ function finDica(form) {
   const avisos = [];
   if (!form.dataset.mexeu && pausa) avisos.push(pausa.trim());
   if (form.dataset.mexeu) avisos.push(`${U.fmtDur(g * 60)} no total.`);
-  if (ini + g >= 1440) avisos.push('Termina no dia seguinte.');
+  const diasDepois = Math.floor((ini + g) / 1440);
+  if (diasDepois === 1) avisos.push('Termina no dia seguinte.');
+  else if (diasDepois > 1) avisos.push(`Termina ${diasDepois} dias depois.`);
   if (g > 16 * 60) avisos.push('Confira: mais de 16 horas.');
   box.textContent = avisos.join(' ');
 }
@@ -1892,18 +1896,19 @@ function setDone(t, done, extra = {}, ops = []) {
 // Cria (ou continua) a tarefa de hoje e liga o cronômetro.
 // ---------------------------------------------------------------------------
 
-function openStart({ cli, cat, item, bloco } = {}) {
+function openStart({ cli, cat, item, bloco, dia } = {}) {
+  dia = dia && dia !== U.todayStr() ? dia : '';
   const c = cliById(cli);
   const k = catById(cat);
   const it = itensOf(k).find((x) => x.id === item);
-  const voltarPara = (attrs = '') => `<button type="button" class="icon-btn" data-action="start-pick" ${attrs} data-bloco="${bloco || ''}" aria-label="Voltar">${icon('left')}</button>`;
+  const voltarPara = (attrs = '') => `<button type="button" class="icon-btn" data-action="start-pick" ${attrs} data-bloco="${bloco || ''}" data-dia="${dia}" aria-label="Voltar">${icon('left')}</button>`;
   const back = voltarPara();
   const grid = (btns) => `<div class="pick-grid">${btns}</div>`;
   const fechar = `<button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button>`;
 
   if (c) {
     const servs = servicosOf(c);
-    openModal(`<div class="modal-body start" data-start-cli="${c.id}" data-start-bloco="${bloco || ''}">
+    openModal(`<div class="modal-body start" data-start-cli="${c.id}" data-start-bloco="${bloco || ''}" data-start-dia="${dia}">
       <header class="modal-head">${voltarPara(`data-cat="${workCatId() || ''}"`)}<h2>${esc(c.nome)}</h2>
         <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
       ${
@@ -1924,8 +1929,8 @@ function openStart({ cli, cat, item, bloco } = {}) {
   }
   if (k && it) {
     const subs = subsOf(k);
-    if (!subs.length) return askComecei({ catId: k.id, itemId: it.id, bloco });
-    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-item="${it.id}" data-start-bloco="${bloco || ''}">
+    if (!subs.length) return askComecei({ catId: k.id, itemId: it.id, bloco, dia });
+    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-item="${it.id}" data-start-bloco="${bloco || ''}" data-start-dia="${dia}">
       <header class="modal-head">${voltarPara(`data-cat="${k.id}"`)}<h2>${esc(it.nome)}</h2>
         <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
       <h3 class="pick-title">O que vai fazer? <em>opcional</em></h3>
@@ -1941,8 +1946,8 @@ function openStart({ cli, cat, item, bloco } = {}) {
     if (isWork(k.id) || itensOf(k).length) {
       const clis = isWork(k.id) ? startClients() : [];
       const btns = isWork(k.id)
-        ? clis.map((x) => `<button type="button" class="pick" data-action="start-pick" data-cli="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('')
-        : itensOf(k).map((x) => `<button type="button" class="pick" data-action="start-pick" data-cat="${k.id}" data-item="${x.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('');
+        ? clis.map((x) => `<button type="button" class="pick" data-action="start-pick" data-cli="${x.id}" data-bloco="${bloco || ''}" data-dia="${dia}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('')
+        : itensOf(k).map((x) => `<button type="button" class="pick" data-action="start-pick" data-cat="${k.id}" data-item="${x.id}" data-bloco="${bloco || ''}" data-dia="${dia}"><i class="dot" style="--c:${k.cor}"></i>${esc(x.nome)}</button>`).join('');
       openModal(`<div class="modal-body start">
         <header class="modal-head">${back}<h2>${esc(k.nome)}</h2>${fechar}</header>
         <h3 class="pick-title">${isWork(k.id) ? 'Qual cliente?' : 'Qual?'}</h3>
@@ -1952,7 +1957,7 @@ function openStart({ cli, cat, item, bloco } = {}) {
     }
     // Categoria sem lista (ex.: Religião, Saúde): o que vai fazer? Os nomes usados antes viram botões.
     const sug = (k.sugestoes || []).filter(Boolean);
-    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-bloco="${bloco || ''}">
+    openModal(`<div class="modal-body start" data-start-cat="${k.id}" data-start-bloco="${bloco || ''}" data-start-dia="${dia}">
       <header class="modal-head">${back}<h2>${esc(k.nome)}</h2>${fechar}</header>
       <h3 class="pick-title">O que você vai fazer?</h3>
       ${sug.length ? grid(sug.map((x) => `<button type="button" class="pick" data-action="start-go" data-serv="${esc(x)}">${icon('play')}${esc(x)}</button>`).join('')) : ''}
@@ -1971,7 +1976,7 @@ function openStart({ cli, cat, item, bloco } = {}) {
     <h3 class="pick-title">O que você vai fazer?</h3>
     ${
       cats.length
-        ? grid(cats.map((cc) => `<button type="button" class="pick" data-action="start-pick" data-cat="${cc.id}" data-bloco="${bloco || ''}"><i class="dot" style="--c:${cc.cor}"></i>${esc(cc.nome)}</button>`).join(''))
+        ? grid(cats.map((cc) => `<button type="button" class="pick" data-action="start-pick" data-cat="${cc.id}" data-bloco="${bloco || ''}" data-dia="${dia}"><i class="dot" style="--c:${cc.cor}"></i>${esc(cc.nome)}</button>`).join(''))
         : '<p class="muted">Crie uma categoria para iniciar por aqui.</p>'
     }
   </div>`);
@@ -1986,27 +1991,31 @@ function askComecei(p) {
   const nome = t ? t.titulo : c ? [p.servico || c.nome, p.pessoa].filter(Boolean).join(' · ') : [it?.nome, p.servico].filter(Boolean).join(' · ') || k?.nome || '';
   const sub = t ? taskSub(t) : c && p.servico ? c.nome : !it && p.servico ? k?.nome || '' : '';
   const voltar = t ? '' : c ? `data-cli="${c.id}"` : `data-cat="${p.catId || ''}" data-item="${p.itemId || ''}"`;
-  const agora = U.fromMin(U.nowMin());
+  // Dia em que a tarefa fica (o da tarefa ou do bloco; sem nada, hoje). Dia passado: a hora não vem com a de agora.
+  const dia = t?.data || p.dia || U.todayStr();
+  const passado = dia < U.todayStr();
   // Tarefa marcada para um horário que já passou: um toque coloca esse horário.
-  const tb = t || (p.bloco ? findTask(p.bloco, U.todayStr()) : null);
-  const marcado = tb?.horario && tb.data === U.todayStr() && U.toMin(tb.horario) < U.nowMin() ? tb.horario : '';
+  const tb = t || (p.bloco ? findTask(p.bloco, dia) : null);
+  const marcado = tb?.horario && (passado || (tb.data === U.todayStr() && U.toMin(tb.horario) < U.nowMin())) ? tb.horario : '';
+  const agora = passado ? marcado : U.fromMin(U.nowMin());
   openModal(`<form class="modal-body start comecei" data-form="comecei" data-p="${esc(JSON.stringify(p))}">
     <header class="modal-head">
       ${t ? '' : `<button type="button" class="icon-btn" data-action="start-pick" ${voltar} data-bloco="${p.bloco || ''}" aria-label="Voltar">${icon('left')}</button>`}
       <h2>${esc(nome)}</h2>
       <button type="button" class="icon-btn" data-action="close-modal" aria-label="Fechar">${icon('x')}</button></header>
     ${sub ? `<p class="muted sm comecei-sub">${esc(sub)}</p>` : ''}
+    ${passado ? `<p class="comecei-dia">${icon('calendario')}Começou em <b>${esc(U.fmtDiaLongo(dia))}</b></p>` : ''}
     <label class="comecei-campo"><span>Comecei:</span><input type="time" name="ini" data-comecei value="${agora}" aria-label="Horário em que começou"></label>
     ${marcado ? `<button type="button" class="btn ghost sm comecei-marcado" data-action="comecei-hora" data-hora="${marcado}">Comecei às ${marcado} (horário da tarefa)</button>` : ''}
-    <p class="muted sm">Já vem com a hora de agora. Se começou antes, mude. O fim fica em aberto: o cronômetro vai rodando.</p>
+    <p class="muted sm">${passado ? 'Coloque a hora em que começou nesse dia.' : 'Já vem com a hora de agora. Se começou antes, mude.'} O fim fica em aberto: o cronômetro vai rodando.</p>
     <footer class="modal-actions">
       <button type="submit" class="btn primary comecei-btn" data-comecei-btn>${icon('play')}<span>Iniciar</span></button>
     </footer>
   </form>`);
 }
 
-async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloco = '', inicio = null, fim = null }) {
-  const today = U.todayStr();
+async function startTask({ cliId, catId, itemId, servico = '', pessoa = '', bloco = '', inicio = null, fim = null, dia = '' }) {
+  const today = dia && inicio ? dia : U.todayStr(); // dia da tarefa (outro dia só com a hora de início dita)
   const list = await ensureDay(today);
   const c = cliById(cliId);
   const categoriaId = c ? workCatId() || c.categoriaId || null : catId;
@@ -3801,7 +3810,12 @@ async function depoisDeFeito(t, antes = null) {
     persist(db.batch(ops));
     render();
   }
-  await resolveEncaixe({ id: t.id, nome: nomeTxt(t), titulo: t.titulo, categoriaId: t.categoriaId, horario: U.fromMin(sp.s), duracao: sp.e - sp.s }, t.data, antes);
+  const nome = nomeTxt(t);
+  await resolveEncaixe({ id: t.id, nome, titulo: t.titulo, categoriaId: t.categoriaId, horario: U.fromMin(sp.s), duracao: Math.min(1440, sp.e) - sp.s }, t.data, antes);
+  // Virou a madrugada: o pedaço depois da meia-noite também confere as tarefas dos dias seguintes.
+  for (let k = 1; k <= 3 && sp.e > 1440 * k; k++) {
+    await resolveEncaixe({ id: t.id, nome, titulo: t.titulo, categoriaId: t.categoriaId, horario: '00:00', duracao: Math.min(1440, sp.e - 1440 * k) }, U.addDays(t.data, k));
+  }
 }
 
 // Registra que a tarefa foi feita de i até f (ms) e conclui.
@@ -3882,6 +3896,17 @@ function iniciaDe(p, ini) {
 // Começou no passado e o horário da tarefa já acabou (ou faz mais de 3 h): ainda está fazendo ou já terminou?
 function perguntaTerminou(p, ini, tb, fimPl) {
   const desde = U.fmtDur((Date.now() - ini) / 1000);
+  // Começou em outro dia: escolhe também em que dia terminou (do dia do início até hoje).
+  const dIni = U.ymd(new Date(ini));
+  const dias = [];
+  for (let d = dIni; d <= U.todayStr() && dias.length < 8; d = U.addDays(d, 1)) dias.push(d);
+  const dFim = fimPl && fimPl <= Date.now() ? U.ymd(new Date(fimPl)) : dIni;
+  const diaSel =
+    dias.length > 1
+      ? `<label class="comecei-campo"><span>No dia:</span><select name="fimDia" aria-label="Dia em que terminou">${dias
+          .map((d) => `<option value="${d}" ${d === dFim ? 'selected' : ''}>${esc(U.fmtDiaCurto(d))}</option>`)
+          .join('')}</select></label>`
+      : '';
   const pl = tb?.horario ? faixa(U.toMin(tb.horario), U.toMin(tb.horario) + duracao(tb)) : '';
   openModal(`<form class="modal-body start comecei terminou" data-form="terminou" data-p="${esc(JSON.stringify({ ...p, inicio: ini }))}">
     <header class="modal-head"><h2>Ainda está fazendo?</h2>
@@ -3893,6 +3918,7 @@ function perguntaTerminou(p, ini, tb, fimPl) {
     }</p>
     <button type="button" class="btn soft full" data-action="comecei-seguindo">${icon('play')}Ainda estou fazendo <small class="muted">(desde ${hhmm(ini)})</small></button>
     <div class="terminou-fim">
+      ${diaSel}
       <label class="comecei-campo"><span>Terminei às:</span><input type="time" name="fim" required value="${fimPl ? hhmm(fimPl) : ''}" aria-label="Horário em que terminou" ${fimPl ? '' : 'autofocus'}></label>
       <button type="submit" class="btn primary">${icon('check')}Já terminei</button>
     </div>
@@ -4008,7 +4034,7 @@ const FORMS = {
       pessoa.focus();
       return toast('Escreva o nome da pessoa.');
     }
-    return askComecei({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+    return askComecei({ cliId: box.dataset.startCli, servico, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco, dia: box.dataset.startDia });
   },
 
   comecei(form) {
@@ -4018,9 +4044,11 @@ const FORMS = {
     } catch {}
     const t = p.taskId ? findTask(p.taskId, p.date) : null;
     const v = form.elements.ini.value;
+    const dia = t?.data || p.dia || U.todayStr();
+    if (!v && dia < U.todayStr()) return form.elements.ini.focus(), toast('Coloque a hora em que começou.');
     let ini = null;
     if (v) {
-      ini = tsOf(t?.data || U.todayStr(), U.toMin(v));
+      ini = tsOf(dia, U.toMin(v));
       if (ini > Date.now() + 60_000) {
         form.elements.ini.focus();
         return toast('Esse horário ainda não chegou.');
@@ -4029,8 +4057,8 @@ const FORMS = {
       if (Date.now() - ini < 60_000) ini = null;
     }
     if (ini && !p.seguindo) {
-      const tb = t || (p.bloco ? findTask(p.bloco, U.todayStr()) : null);
-      const fimPl = tb?.horario && !tb.fimAberto && tb.data === U.todayStr() ? tsOf(tb.data, U.toMin(tb.horario) + duracao(tb)) : null;
+      const tb = t || (p.bloco ? findTask(p.bloco, dia) : null);
+      const fimPl = tb?.horario && !tb.fimAberto ? tsOf(tb.data, U.toMin(tb.horario) + duracao(tb)) : null;
       if ((fimPl && fimPl <= Date.now()) || Date.now() - ini >= 3 * 3600_000) return perguntaTerminou(p, ini, tb, fimPl);
     }
     return iniciaDe(p, ini);
@@ -4045,9 +4073,10 @@ const FORMS = {
     const ini = Number(p.inicio);
     const v = form.elements.fim.value;
     if (!v || !ini) return form.elements.fim.focus();
-    const dia = t?.data || U.todayStr();
-    let fim = tsOf(dia, U.toMin(v));
-    if (fim <= ini) fim += 86_400_000; // passou da meia-noite
+    const fimDia = form.elements.fimDia?.value;
+    let fim = tsOf(fimDia || t?.data || p.dia || U.todayStr(), U.toMin(v));
+    if (fim <= ini && !fimDia) fim += 86_400_000; // passou da meia-noite
+    if (fim <= ini) return toast('O fim tem que ser depois do início.'), form.elements.fim.focus();
     if (fim > Date.now() + 60_000) return toast('Esse horário ainda não chegou.'), form.elements.fim.focus();
     if (p.taskId) {
       if (!t) return closeModal();
@@ -4065,7 +4094,7 @@ const FORMS = {
       k.sugestoes = [nome, ...(k.sugestoes || [])].slice(0, 20);
       persist(db.update('categories', k.id, { sugestoes: k.sugestoes }));
     }
-    return askComecei({ catId: box.dataset.startCat, servico: nome, bloco: box.dataset.startBloco });
+    return askComecei({ catId: box.dataset.startCat, servico: nome, bloco: box.dataset.startBloco, dia: box.dataset.startDia });
   },
 
   async daily(form) {
@@ -4555,7 +4584,7 @@ const ACTIONS = {
     if (t && identFalta(t)) return openIdent(t, (x) => openFinish(x));
     if (t) openFinish(t);
   },
-  'start-pick': ({ cli, cat, item, bloco }) => openStart({ cli, cat, item, bloco }),
+  'start-pick': ({ cli, cat, item, bloco, dia }) => openStart({ cli, cat, item, bloco, dia }),
   'comecei-seguindo': (_, el) => {
     let p = {};
     try {
@@ -4579,9 +4608,9 @@ const ACTIONS = {
         pessoa.focus();
         return toast('Escreva o nome da pessoa.');
       }
-      return askComecei({ cliId: box.dataset.startCli, servico: serv, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco });
+      return askComecei({ cliId: box.dataset.startCli, servico: serv, pessoa: pessoa?.value || '', bloco: box.dataset.startBloco, dia: box.dataset.startDia });
     }
-    return askComecei({ catId: box.dataset.startCat, itemId: box.dataset.startItem, servico: serv, bloco: box.dataset.startBloco });
+    return askComecei({ catId: box.dataset.startCat, itemId: box.dataset.startItem, servico: serv, bloco: box.dataset.startBloco, dia: box.dataset.startDia });
   },
   'open-task': ({ id, date }) => {
     const t = findTask(id, date);
@@ -4640,7 +4669,7 @@ const ACTIONS = {
     const run = isRunning(t);
     // Bloco da rotina de Cursos (lista) ou de Trabalho sem cliente: primeiro escolhe o curso ou o cliente.
     const escolher = itensOf(catById(t.categoriaId)).length || (isWork(t.categoriaId) && !t.clienteId && startClients().length);
-    if (!run && !t.itemId && !elapsed(t) && escolher) return openStart({ cat: t.categoriaId, bloco: t.data === U.todayStr() ? t.id : '' });
+    if (!run && !t.itemId && !elapsed(t) && escolher) return openStart({ cat: t.categoriaId, bloco: t.id, dia: t.data });
     if (!run && !elapsed(t)) return askComecei({ taskId: t.id, date: t.data });
     const detailOpen = modal.open && modal.dataset.detail === id;
     if (run) {
