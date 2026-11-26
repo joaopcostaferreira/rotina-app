@@ -867,7 +867,7 @@ export function createFin(ctx) {
     const rec = kind === 'receitas';
     if (campo === 'cat') {
       const usadas = new Set(F().tx.filter((t) => t.tipo === (rec ? 'entrada' : 'saida')).map((t) => t.catId));
-      return [['-', 'Sem descrição'], ...F().cats.filter((c) => usadas.has(c.id) || (rec ? c.grupo === 'entrada' : c.grupo !== 'entrada')).map((c) => [c.id, c.nome])];
+      return [['-', 'Sem descrição'], ...F().cats.filter((c) => usadas.has(c.id) || (!c.arquivada && (rec ? c.grupo === 'entrada' : c.grupo !== 'entrada'))).map((c) => [c.id, c.nome])];
     }
     if (campo === 'cli') {
       const clis = [...new Set(F().tx.filter((t) => t.tipo === 'entrada' && t.clienteId).map((t) => t.clienteId))]
@@ -1073,11 +1073,19 @@ export function createFin(ctx) {
     const linha = (c) => `<li><button type="button" data-action="fin-edit-cat" data-id="${c.id}"><span class="grow">${esc(c.nome)}</span>
             <small class="chip">${grupoNome(c.grupo)}</small></button></li>`;
     const ordem = (a, b) => GRUPOS.findIndex((g) => g[0] === a.grupo) - GRUPOS.findIndex((g) => g[0] === b.grupo) || a.nome.localeCompare(b.nome, 'pt-BR');
-    const ganhos = F().cats.filter(ganho).sort(ordem);
-    const gastos = F().cats.filter((c) => !ganho(c)).sort(ordem);
-    if (!F().cats.length) return '<p class="muted sm">Nenhuma descrição.</p>';
+    const ativas = F().cats.filter((c) => !c.arquivada);
+    const ganhos = ativas.filter(ganho).sort(ordem);
+    const gastos = ativas.filter((c) => !ganho(c)).sort(ordem);
+    // Excluídas: o que já foi lançado continua com elas; dá para trazer de volta.
+    const exc = F().cats.filter((c) => c.arquivada).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const excHTML = exc.length
+      ? `<details class="fin-excluidas"><summary>Excluídas (${exc.length})</summary>
+        <p class="muted sm">O que já foi lançado continua com elas. Daqui para frente não aparecem nas opções.</p>
+        <ul class="fin-contas">${exc.map((c) => `<li><span class="grow">${esc(c.nome)}</span><button type="button" class="btn ghost sm" data-action="fin-restaura-cat" data-id="${c.id}">Restaurar</button></li>`).join('')}</ul></details>`
+      : '';
+    if (!ativas.length) return `<p class="muted sm">Nenhuma descrição.</p>${excHTML}`;
     return `${ganhos.length ? `<p class="fin-grupo pos">Ganhos</p><ul class="fin-contas fin-desc pos">${ganhos.map(linha).join('')}</ul>` : ''}
-      ${gastos.length ? `<p class="fin-grupo neg">Gastos</p><ul class="fin-contas fin-desc neg">${gastos.map(linha).join('')}</ul>` : ''}`;
+      ${gastos.length ? `<p class="fin-grupo neg">Gastos</p><ul class="fin-contas fin-desc neg">${gastos.map(linha).join('')}</ul>` : ''}${excHTML}`;
   }
 
   // Clientes: criar e editar daqui mesmo, com o que entrou de cada um no mês.
@@ -1259,10 +1267,10 @@ export function createFin(ctx) {
   }
 
   function catOptions(sel, tipo) {
-    const lista = F().cats.filter((c) => c.id === sel || (tipo === 'entrada' ? c.grupo === 'entrada' || c.grupo === 'aporte' : c.grupo !== 'entrada'));
+    const lista = F().cats.filter((c) => c.id === sel || (!c.arquivada && (tipo === 'entrada' ? c.grupo === 'entrada' || c.grupo === 'aporte' : c.grupo !== 'entrada')));
     return `<option value="">Sem descrição</option>${GRUPOS.map(([g, l]) => {
       const arr = lista.filter((c) => (c.grupo || 'variavel') === g);
-      return arr.length ? `<optgroup label="${l}">${arr.map((c) => opt(c.id, c.nome, sel)).join('')}</optgroup>` : '';
+      return arr.length ? `<optgroup label="${l}">${arr.map((c) => opt(c.id, c.arquivada ? `${c.nome} (excluída)` : c.nome, sel)).join('')}</optgroup>` : '';
     }).join('')}`;
   }
 
@@ -1624,7 +1632,7 @@ export function createFin(ctx) {
   const usoCat = (id) => ({ tx: F().tx.filter((t) => t.catId === id), estim: F().estim.filter((e) => e.catId === id) });
   function juntarCampo(c) {
     const u = usoCat(c.id);
-    const outras = F().cats.filter((x) => x.id !== c.id).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const outras = F().cats.filter((x) => x.id !== c.id && !x.arquivada).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
     if (!outras.length) return '';
     return `<label class="field"><span>Juntar com outra descrição <em>opcional</em></span><select name="junta">
         <option value="">Não juntar</option>${outras.map((x) => opt(x.id, x.nome, '')).join('')}</select></label>
@@ -1659,7 +1667,7 @@ export function createFin(ctx) {
     const ts = filtrados(kind);
     if (!ts.length) return toast('Nada filtrado.');
     const rec = kind === 'receitas';
-    const cats = F().cats.slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+    const cats = F().cats.filter((c) => !c.arquivada).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
     const mesmas = new Set(ts.map((t) => t.catId || ''));
     const atual = mesmas.size === 1 ? [...mesmas][0] : '';
     openModal(`<form class="modal-body fin-form" data-form="fin-mover" data-kind="${kind}">
@@ -2232,7 +2240,27 @@ export function createFin(ctx) {
       }
       if (k === 'cartoes' && F().tx.some((t) => t.cartaoId === id)) return toast('Este cartão tem lançamentos e não pode ser excluído.');
       const nome = doc.nome || doc.motivo || 'este item';
-      if (k === 'cats' && usoCat(id).tx.length && !(await ask(`“${nome}” tem ${usoCat(id).tx.length} lançamento(s), que ficarão sem descrição. Para passar tudo para outra, use “Juntar com outra descrição”.`, 'Excluir mesmo'))) return openCat(doc);
+      if (k === 'cats') {
+        // Excluir não apaga: a descrição fica arquivada. O que já foi lançado continua com ela;
+        // os lançamentos de depois de hoje e as contas fixas/assinaturas ficam sem descrição.
+        if (!(await ask(`Excluir “${nome}”? O que já foi lançado até hoje continua com ela. Daqui para frente ela some das opções, e os lançamentos de depois de hoje e as contas fixas e assinaturas ficam sem descrição.`, 'Excluir'))) return openCat(doc);
+        const hoje = U.todayStr();
+        Object.assign(doc, { arquivada: true, arquivadaEm: hoje });
+        const ops = [{ type: 'update', col: COLS.cats, id, data: { arquivada: true, arquivadaEm: hoje } }];
+        for (const t of F().tx) {
+          if (t.catId !== id || (t.dataCompra || t.data || '') <= hoje) continue;
+          t.catId = null;
+          ops.push({ type: 'update', col: COLS.tx, id: t.id, data: { catId: null } });
+        }
+        for (const e of F().estim) {
+          if (e.catId !== id) continue;
+          e.catId = null;
+          ops.push({ type: 'update', col: COLS.estim, id: e.id, data: { catId: null } });
+        }
+        persist(db.batch(ops));
+        toast(`“${nome}” excluída. O histórico continua com ela.`);
+        return render();
+      }
       if (k === 'emp' && recebido(doc) && !(await ask(`“${doc.nome}” já tem ${brl(recebido(doc))} abatido. Excluir apaga também esses recebimentos.`, 'Continuar'))) return openEmp(doc);
       if (!(await ask(`Excluir “${nome}”?`))) return openAgain(k, doc);
       F()[k] = F()[k].filter((x) => x !== doc);
@@ -2248,6 +2276,14 @@ export function createFin(ctx) {
         }
       }
       persist(db.batch(ops));
+      render();
+    },
+    'fin-restaura-cat': ({ id }) => {
+      const c = achar('cats', id);
+      if (!c) return;
+      Object.assign(c, { arquivada: false, arquivadaEm: null });
+      persist(db.update(COLS.cats, id, { arquivada: false, arquivadaEm: null }));
+      toast(`“${c.nome}” voltou para as opções.`);
       render();
     },
     'fin-export': () => openExport(),

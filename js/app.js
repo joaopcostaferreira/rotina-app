@@ -114,13 +114,15 @@ const root = document.getElementById('root');
 const modal = document.getElementById('modal');
 
 const catById = (id) => S.categories.find((c) => c.id === id);
+// Categoria excluída fica guardada como "arquivada": o passado continua com ela, mas ela some das opções.
+const ativas = () => S.categories.filter((c) => !c.arquivada);
 const cliById = (id) => S.clients.find((c) => c.id === id);
 const colorOf = (t) => catById(t.categoriaId)?.cor || '#94a3b8';
 // Clientes são só do Trabalho: a categoria com "trabalho" no nome (ou, se ela foi renomeada, a que tiver clientes).
-const workCatId = () =>
-  S.categories.find((c) => /trabalho/i.test(c.nome))?.id ||
-  S.categories.find((c) => S.clients.some((x) => x.categoriaId === c.id))?.id ||
-  null;
+const workCatId = () => {
+  const acha = (cs) => cs.find((c) => /trabalho/i.test(c.nome))?.id || cs.find((c) => S.clients.some((x) => x.categoriaId === c.id))?.id;
+  return acha(ativas()) || acha(S.categories) || null;
+};
 const isWork = (catId) => !!catId && catId === workCatId();
 const workColor = () => catById(workCatId())?.cor || '#0ea5e9';
 const clientsOf = (catId) => (isWork(catId) ? [...S.clients].sort(U.byNome) : []);
@@ -132,7 +134,7 @@ const servicosOf = (c) => (c?.servicos || []).filter(Boolean);
 // Categorias com lista própria (ex.: Cursos → Inglês, Fotografia) e tarefas opcionais ao iniciar (ex.: Estudar, Praticar).
 const allItens = (cat) => (cat && !isWork(cat.id) ? (cat.itens || []).filter((i) => i?.nome) : []);
 const itensOf = (cat) => allItens(cat).filter((i) => !i.oculto);
-const listCats = () => S.categories.filter((c) => itensOf(c).length);
+const listCats = () => ativas().filter((c) => itensOf(c).length);
 const itemOf = (t) => (t?.itemId ? allItens(catById(t.categoriaId)).find((i) => i.id === t.itemId) : null);
 const subsOf = (cat) => (cat?.subtarefas || []).filter(Boolean);
 const visible = (tasks) => (tasks || []).filter((t) => !t.removido);
@@ -1500,7 +1502,8 @@ function viewClientes() {
 }
 
 function viewCategorias() {
-  const rows = S.categories
+  const lista = ativas();
+  const rows = lista
     .map((c, i) => {
       const nCli = S.clients.length;
       const nRec = S.recurring.filter((x) => x.categoriaId === c.id).length;
@@ -1512,7 +1515,7 @@ function viewCategorias() {
           }</small></div>
         <div class="row-actions">
           <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="-1" aria-label="Mover para cima" ${i === 0 ? 'disabled' : ''}>${icon('up')}</button>
-          <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="1" aria-label="Mover para baixo" ${i === S.categories.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
+          <button type="button" class="icon-btn sm" data-action="cat-move" data-id="${c.id}" data-n="1" aria-label="Mover para baixo" ${i === lista.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
           <button type="button" class="icon-btn sm" data-action="edit-cat" data-id="${c.id}" aria-label="Editar">${icon('edit')}</button>
         </div>
       </li>`;
@@ -1524,7 +1527,26 @@ function viewCategorias() {
     <button type="button" class="btn primary" data-action="new-cat">${icon('plus')}<span>Categoria</span></button>
   </header>
   <p class="muted intro">A ordem aqui é a ordem em que as categorias aparecem na lista do dia. Uma categoria pode ter a própria lista (ex.: Cursos → Inglês, Fotografia), que ganha o ▶ no Painel.</p>
-  ${rows ? `<ul class="card cat-list">${rows}</ul>` : emptyState('Nenhuma categoria', 'Crie categorias como Religião, Relacionamento, Trabalho e Saúde.')}`;
+  ${rows ? `<ul class="card cat-list">${rows}</ul>` : emptyState('Nenhuma categoria', 'Crie categorias como Religião, Relacionamento, Trabalho e Saúde.')}
+  ${catsExcluidasHTML()}`;
+}
+
+// Categorias excluídas: o histórico continua com elas; dá para trazer de volta.
+function catsExcluidasHTML() {
+  const exc = S.categories.filter((c) => c.arquivada);
+  if (!exc.length) return '';
+  return `<details class="card cat-excluidas">
+    <summary>Excluídas (${exc.length})</summary>
+    <p class="muted sm">O que já passou continua com elas. Daqui para frente não aparecem nas opções.</p>
+    <ul class="cat-list">${exc
+      .map(
+        (c) => `<li class="cat-row" style="--c:${c.cor}"><span class="swatch"></span>
+        <div class="cat-info"><strong>${esc(c.nome)}</strong>${c.arquivadaEm ? `<small class="muted">excluída em ${c.arquivadaEm.slice(8, 10)}/${c.arquivadaEm.slice(5, 7)}/${c.arquivadaEm.slice(0, 4)}</small>` : ''}</div>
+        <div class="row-actions"><button type="button" class="btn ghost sm" data-action="cat-restaurar" data-id="${c.id}">Restaurar</button></div>
+      </li>`,
+      )
+      .join('')}</ul>
+  </details>`;
 }
 
 function viewAjustes() {
@@ -2004,7 +2026,7 @@ function openStart({ cli, cat, item, bloco, dia } = {}) {
     return;
   }
   // Escolha inicial: todas as categorias.
-  const cats = S.categories.filter((cc) => !isWork(cc.id) || startClients().length);
+  const cats = ativas().filter((cc) => !isWork(cc.id) || startClients().length);
   openModal(`<div class="modal-body start">
     ${modalHead('Iniciar tarefa')}
     <h3 class="pick-title">O que você vai fazer?</h3>
@@ -2506,6 +2528,15 @@ function openRelDias(ch, key) {
         const ps = r.pausas.filter(([x, y]) => y - x >= 1);
         det = ps.slice(0, 6).map(([x, y]) => `${minTxt(x)}–${minTxt(y)}`).join(' · ') + (ps.length > 6 ? ` +${ps.length - 6}` : '');
       } else if (key === 'lazer' && r.last != null) det = `Última tarefa até ${minTxt(r.last)}`;
+      // Por que deu menos que a conta de cabeça: o que foi marcado com X e o tempo sem horário saem daqui.
+      const tr = r.tirou?.[key];
+      if (tr) {
+        const extra = [
+          tr.x >= 1 && `menos ${U.fmtDur(tr.x * 60)} de tarefa com X (foi para Desperdiçado)`,
+          tr.solto >= 1 && `menos ${U.fmtDur(tr.solto * 60)} de tarefa feita sem horário`,
+        ].filter(Boolean);
+        if (extra.length) det = [det, ...extra].filter(Boolean).join(' · ');
+      }
       linhas.push({ d, sec: min * 60, det });
     }
   }
@@ -2653,10 +2684,13 @@ function seuDiaDoDia(d) {
     entre: pausas,
     lazer: [[lastEnd, end]],
   };
+  // Quanto saiu de cada parte e por quê (aparece no detalhe de cada dia, para a conta fazer sentido).
+  const tirou = { acordou: { x: 0, solto: 0 }, entre: { x: 0, solto: 0 }, lazer: { x: 0, solto: 0 } };
   for (const [k, lista] of Object.entries(regioes)) {
     const tira = Math.min(g[k], lista.reduce((s, [a, b]) => s + sobrep(a, b), 0));
     g[k] -= tira;
     g.desperdicado += tira;
+    tirou[k].x = tira;
   }
   // Tempo sem horário: entra como marcado e sai do que estava sem marcação.
   for (const k of ['lazer', 'entre', 'acordou']) {
@@ -2664,12 +2698,13 @@ function seuDiaDoDia(d) {
     g[k] -= tira;
     g.marcado += tira;
     solto -= tira;
+    tirou[k].solto = tira;
   }
   // O marcado do dia, dividido entre as categorias na proporção do cronômetro de cada uma.
   const cat = new Map();
   const bruto = [...brutoCat.values()].reduce((a, b) => a + b, 0);
   if (bruto > 0) for (const [k, m] of brutoCat) cat.set(k, (g.marcado * m) / bruto);
-  return { g, cat, first: merged.length ? merged[0][0] : null, last: merged.length ? lastEnd : null, pausas, nf };
+  return { g, cat, first: merged.length ? merged[0][0] : null, last: merged.length ? lastEnd : null, pausas, nf, tirou };
 }
 
 function seuDiaCard(from, to) {
@@ -2904,7 +2939,7 @@ async function planImport(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Arquivo de importação inválido.');
 
   const plan = { cats: [], clis: [], upd: [], recs: [], tasks: [], diario: [], avisos: [], erros: [] };
-  const catMap = new Map(S.categories.map((c) => [norm(c.nome), c]));
+  const catMap = new Map(ativas().map((c) => [norm(c.nome), c]));
   const cliMap = new Map(S.clients.map((c) => [norm(c.nome), c]));
   let ordem = S.categories.length ? Math.max(...S.categories.map((c) => c.ordem ?? 0)) + 1 : 0;
 
@@ -3520,11 +3555,13 @@ function catClientFields(catId, cliId, itemId, obrig = false) {
 }
 
 function catClientFieldsBase(catId, cliId, obrig = false) {
-  if (!S.categories.length) return `<p class="note">Crie uma <a href="#/categorias">categoria</a> primeiro.</p>`;
+  // A categoria excluída só aparece na tarefa que já era dela (para não trocar sem querer ao editar).
+  const opcoes = S.categories.filter((c) => !c.arquivada || c.id === catId);
+  if (!opcoes.length) return `<p class="note">Crie uma <a href="#/categorias">categoria</a> primeiro.</p>`;
   return `<div class="row2">
     <label class="field"><span>Categoria</span>
-      <select name="categoriaId" data-cat-select required>${S.categories
-        .map((c) => `<option value="${c.id}" ${c.id === catId ? 'selected' : ''}>${esc(c.nome)}</option>`)
+      <select name="categoriaId" data-cat-select required>${opcoes
+        .map((c) => `<option value="${c.id}" ${c.id === catId ? 'selected' : ''}>${esc(c.nome)}${c.arquivada ? ' (excluída)' : ''}</option>`)
         .join('')}</select></label>
     <label class="field" data-client-field ${isWork(catId) ? '' : 'hidden'}><span>Cliente${obrig ? '' : ' <em>opcional</em>'}</span>
       <select name="clienteId">${clientOptions(catId, cliId, obrig)}</select>
@@ -3571,7 +3608,7 @@ function avisoFields(t) {
 }
 
 const defaultCat = (preferWork) =>
-  (preferWork && S.categories.find((c) => /trabalho/i.test(c.nome))?.id) || S.categories[0]?.id || '';
+  (preferWork && ativas().find((c) => /trabalho/i.test(c.nome))?.id) || ativas()[0]?.id || '';
 
 function openDailyForm(t) {
   // Tarefa já feita ou com cronômetro: o formulário mostra o horário em que ela foi feita (ou começou), não o planejado.
@@ -4440,11 +4477,9 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && S.diaPop && !modal.open) ACTIONS['dia-fechar']();
 });
-// Dois cliques num dia do calendário: abre a agenda dele.
-document.addEventListener('dblclick', (e) => {
-  const c = e.target.closest?.('.cal-cell[data-date]');
-  if (c) ACTIONS['dia-abrir']({ date: c.dataset.date });
-});
+// Dois cliques num dia do calendário abrem a agenda dele (ver 'cal-pick'). O "dblclick" do navegador
+// não servia: o 1º clique redesenha o calendário e o 2º cai num botão novo.
+let calUltimo = { d: '', t: 0 };
 
 function saveSetting(el) {
   const name = el.name;
@@ -4774,6 +4809,13 @@ const ACTIONS = {
     render();
   },
   'cal-pick': ({ date }) => {
+    // Segundo clique no mesmo dia, logo em seguida: abre o dia.
+    const agoraMs = Date.now();
+    if (calUltimo.d === date && agoraMs - calUltimo.t < 500) {
+      calUltimo = { d: '', t: 0 };
+      return ACTIONS['dia-abrir']({ date });
+    }
+    calUltimo = { d: date, t: agoraMs };
     S.calSel = date;
     if (date.slice(0, 7) !== S.calMonth) S.calMonth = date.slice(0, 7);
     render();
@@ -4844,20 +4886,46 @@ const ACTIONS = {
 
   'new-cat': () => openCatForm({}),
   'edit-cat': ({ id }) => openCatForm(catById(id) || {}),
+  // Excluir não apaga: a categoria fica arquivada. O passado continua com ela; daqui para frente ela some.
   'delete-cat': async ({ id }) => {
     const c = catById(id);
-    if (!c || !(await ask(`Excluir a categoria “${c.nome}”? Tarefas e clientes dela ficarão como “Sem categoria”.`))) return;
-    S.categories = S.categories.filter((x) => x !== c);
-    persist(db.remove('categories', id));
+    if (!c || !(await ask(`Excluir a categoria “${c.nome}”? O que já passou continua com ela. Daqui para frente ela some das opções, e as tarefas que ainda não foram feitas (de hoje em diante e as da rotina) ficam sem categoria.`))) return;
+    const today = U.todayStr();
+    Object.assign(c, { arquivada: true, arquivadaEm: today });
+    const ops = [{ type: 'update', col: 'categories', id, data: { arquivada: true, arquivadaEm: today } }];
+    for (const r of S.recurring) {
+      if (r.categoriaId !== id) continue;
+      r.categoriaId = null;
+      ops.push({ type: 'update', col: 'recurringTasks', id: r.id, data: { categoriaId: null } });
+    }
+    closeModal();
+    const futuras = await db.range('dailyTasks', 'data', today, '9999-12-31');
+    for (const t of futuras) {
+      if (t.categoriaId !== id || temRegistro(t)) continue;
+      ops.push({ type: 'update', col: 'dailyTasks', id: t.id, data: { categoriaId: null } });
+    }
+    persist(db.batch(ops));
+    invalidateFrom(today);
     render();
+    toast(`“${c.nome}” excluída. O histórico continua com ela.`);
+  },
+  'cat-restaurar': ({ id }) => {
+    const c = catById(id);
+    if (!c) return;
+    Object.assign(c, { arquivada: false, arquivadaEm: null });
+    persist(db.update('categories', id, { arquivada: false, arquivadaEm: null }));
+    render();
+    toast(`“${c.nome}” voltou para as opções.`);
   },
   'cat-move': ({ id, n }) => {
-    const i = S.categories.findIndex((c) => c.id === id);
+    const lista = ativas();
+    const i = lista.findIndex((c) => c.id === id);
     const j = i + Number(n);
-    if (i < 0 || j < 0 || j >= S.categories.length) return;
-    [S.categories[i], S.categories[j]] = [S.categories[j], S.categories[i]];
-    S.categories.forEach((c, k) => (c.ordem = k));
-    persist(db.batch(S.categories.map((c) => ({ type: 'update', col: 'categories', id: c.id, data: { ordem: c.ordem } }))));
+    if (i < 0 || j < 0 || j >= lista.length) return;
+    [lista[i], lista[j]] = [lista[j], lista[i]];
+    lista.forEach((c, k) => (c.ordem = k));
+    sortCats();
+    persist(db.batch(lista.map((c) => ({ type: 'update', col: 'categories', id: c.id, data: { ordem: c.ordem } }))));
     render();
   },
 
